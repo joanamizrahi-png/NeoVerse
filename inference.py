@@ -11,13 +11,21 @@ from diffsynth.utils.auxiliary import CameraTrajectory, load_video, homo_matrix_
 @torch.no_grad()
 def generate_video(pipe, input_video, prompt, negative_prompt, cam_traj: CameraTrajectory,
                    output_path="outputs/output.mp4", alpha_threshold=1.0, static_flag=False,
-                   seed=42, cfg_scale=1.0, num_inference_steps=4):
+                   seed=42, cfg_scale=1.0, num_inference_steps=4, semantic_labels=None, label_colors=None):
     device = pipe.device
     height, width = input_video[0].size[1], input_video[0].size[0]
     views = {
         "img": torch.stack([F.to_tensor(image)[None] for image in input_video], dim=1).to(device),
         "is_target": torch.zeros((1, len(input_video)), dtype=torch.bool, device=device),
     }
+    # Semantic wiring: per-pixel SAM3 class labels, aligned 1:1 with input_video frames.
+    # Carried inside `views` (just like "img") so they reach prepare_splats unchanged.
+    if semantic_labels is not None:
+        assert semantic_labels.shape[0] == len(input_video), (
+            f"label frames {semantic_labels.shape[0]} != video frames {len(input_video)} "
+            f"(re-run sam3_precompute_labels.py with the same --num_frames/--width/--height)"
+        )
+        views["labels"] = torch.as_tensor(semantic_labels, dtype=torch.long, device=device).unsqueeze(0)  # [1,N,H,W]
     if static_flag:
         views["is_static"] = torch.ones((1, len(input_video)), dtype=torch.bool, device=device)
         views["timestamp"] = torch.zeros((1, len(input_video)), dtype=torch.int64, device=device)
@@ -64,6 +72,27 @@ def generate_video(pipe, input_video, prompt, negative_prompt, cam_traj: CameraT
         sh_degree=0, width=width, height=height,
     )
     target_mask = (target_alpha > alpha_threshold).float()
+
+    # Semantic render: one extra rasterization pass with one-hot labels as colors, argmax per pixel.
+    if semantic_labels is not None and getattr(pipe, "save_root", None):
+        import imageio
+        target_sem = pipe.reconstructor.gs_renderer.rasterizer.forward(
+            gaussians,
+            render_viewmats=[target_world2cam],
+            render_Ks=[K_zoomed],
+            render_timestamps=[timestamps],
+            sh_degree=0, width=width, height=height, feature="labels",
+        )[0]                                              # [V, H, W, C] label logits
+        sem_idx = target_sem[0].argmax(dim=-1).cpu().numpy().astype(np.int32)   # [V, H, W] class ids (drop batch)
+        os.makedirs(pipe.save_root, exist_ok=True)
+        np.save(os.path.join(pipe.save_root, "target_semantic_idx.npy"), sem_idx)
+        if label_colors is not None:
+            colors = np.asarray(label_colors, dtype=np.uint8)
+            colors = np.concatenate([colors, np.zeros((max(0, sem_idx.max() + 1 - len(colors)), 3), np.uint8)])
+            sem_rgb = colors[sem_idx]                     # [V, H, W, 3]
+            imageio.mimsave(os.path.join(pipe.save_root, "target_semantic.mp4"), list(sem_rgb), fps=16)
+        print(f"Saved semantic render ({sem_idx.shape}) to {pipe.save_root}/target_semantic.mp4")
+
     if cam_traj.use_first_frame:
         target_rgb[0, 0] = views["img"][0, 0].permute(1, 2, 0)
         target_mask[0, 0] = 1.0
@@ -156,6 +185,9 @@ def parse_args():
                         help="Save intermediate rendering visualizations")
     parser.add_argument("--low_vram", action="store_true",
                         help="Enable low-VRAM mode with model offloading (reduces peak VRAM usage)")
+    parser.add_argument("--semantic_labels", default=None,
+                        help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
+                             "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
 
     return parser.parse_args()
 
@@ -234,6 +266,20 @@ def main():
                         resize_mode=args.resize_mode,
                         static_scene=args.static_scene)
 
+    # Load precomputed SAM3 semantic labels (explicit path, or auto-derived from input name)
+    semantic_labels = None
+    label_colors = None
+    labels_path = args.semantic_labels
+    if labels_path is None:
+        stem = os.path.splitext(os.path.basename(args.input_path))[0]
+        auto = os.path.join("outputs/sam3_labels", f"{stem}.npz")
+        labels_path = auto if os.path.exists(auto) else None
+    if labels_path is not None:
+        _d = np.load(labels_path)
+        semantic_labels = _d["labels"]   # [N, H, W] int
+        label_colors = _d["class_colors"] if "class_colors" in _d.files else None
+        print(f"Loaded semantic labels from {labels_path}: {semantic_labels.shape}")
+
     # Run inference
     output_path = args.output_path
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -257,6 +303,8 @@ def main():
         seed=args.seed,
         cfg_scale=cfg_scale,
         num_inference_steps=num_inference_steps,
+        semantic_labels=semantic_labels,
+        label_colors=label_colors,
     )
     print(f"Done! Output saved to: {output_path}")
     return 0

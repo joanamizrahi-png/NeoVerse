@@ -6,3 +6,7 @@ __pycache__
 
 /outputs
 /models
+
+*.log
+freeze_run.log
+freeze_mem.log

@@ -25,6 +25,7 @@ class Gaussians:
         scales: Float[Tensor, "*batch 3"],
         rotations: Float[Tensor, "*batch 4"],
         confidences: Optional[Float[Tensor, "*batch"]] = None,
+        labels: Optional[Tensor] = None,
         timestamp: int = 0,
         life_span: Float[Tensor, "*batch"] | float = 1.0,
         life_span_gamma: float = 0.0,
@@ -43,6 +44,7 @@ class Gaussians:
         self.scales = scales
         self.rotations = rotations
         self.confidences = confidences
+        self.labels = labels
         self.timestamp = timestamp
         self.life_span = life_span
         self.life_span_gamma = life_span_gamma
@@ -113,12 +115,14 @@ class Gaussians:
         transitioned_opacities = self.transition_opacities(target_timestamp, mask)
         transitioned_scales = self.transition_scales(target_timestamp, mask)
         transitioned_rotations = self.transition_rotations(target_timestamp, mask)
+        transitioned_labels = self.transition_labels(target_timestamp, mask)
         return Gaussians(
             means=transitioned_means,
             harmonics=transitioned_harmonics,
             opacities=transitioned_opacities,
             scales=transitioned_scales,
             rotations=transitioned_rotations,
+            labels=transitioned_labels,
         )
 
     def transition_means(self, target_timestamp, mask):
@@ -156,6 +160,19 @@ class Gaussians:
         else:
             transitioned_harmonics = self.harmonics[[]]
         return transitioned_harmonics
+
+    def transition_labels(self, target_timestamp, mask):
+        # Labels are view- and time-independent: just follow the same mask as harmonics.
+        if self.labels is None:
+            return None
+        if self.timestamp == -1 or target_timestamp == self.timestamp:
+            return self.labels[mask]
+        elif target_timestamp > self.timestamp and target_timestamp < self.forward_timestamp:
+            return self.labels[mask]
+        elif target_timestamp < self.timestamp and target_timestamp > self.backward_timestamp:
+            return self.labels[mask]
+        else:
+            return self.labels[[]]
 
     def transition_opacities(self, target_timestamp, mask):
         opacities = self.opacities[mask]
@@ -292,7 +309,7 @@ class Rasterizer:
         self.bidirection = bidirection
         self.backgrounds = backgrounds
 
-    def forward(self, render_splats, render_viewmats, render_Ks, render_timestamps, sh_degree, width, height):
+    def forward(self, render_splats, render_viewmats, render_Ks, render_timestamps, sh_degree, width, height, feature="rgb"):
         assert len(render_splats) == len(render_viewmats) == len(render_Ks) == len(render_timestamps), \
             "Number of batches in gaussians must match the batch size in render_viewmats and render_Ks."
         # Prevent OOM by using chunked rendering
@@ -340,7 +357,7 @@ class Rasterizer:
                         )
                 rendered_colors, rendered_depths, rendered_alphas = self.rasterize_splats(
                     transitioned_splats, viewmats_i[None], Ks_i[None],
-                    width=width, height=height, sh_degree=sh_degree,
+                    width=width, height=height, sh_degree=sh_degree, feature=feature,
                 )
                 batch_colors_list.append(rendered_colors)
                 batch_depths_list.append(rendered_depths)
@@ -360,6 +377,7 @@ class Rasterizer:
         Ks: Tensor,
         width: int,
         height: int,
+        feature: str = "rgb",
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         if len(splats) > 0:
@@ -367,15 +385,19 @@ class Rasterizer:
             quats = torch.cat([splat.rotations for splat in splats], dim=0)
             scales = torch.cat([splat.scales for splat in splats], dim=0)
             opacities = torch.cat([splat.opacities for splat in splats], dim=0)
-            colors = torch.cat([splat.harmonics for splat in splats], dim=0)
-
-        if len(splats) == 0 or means.shape[0] == 0:
-            return (
-                torch.zeros((1, height, width, 3), dtype=torch.float32, device=viewmats.device),
-                torch.zeros((1, height, width, 1), dtype=torch.float32, device=viewmats.device),
-                torch.zeros((1, height, width, 1), dtype=torch.float32, device=viewmats.device),
+            # Render either view-dependent color (harmonics) or one-hot semantic labels.
+            colors = torch.cat(
+                [(splat.labels if feature == "labels" else splat.harmonics) for splat in splats],
+                dim=0,
             )
 
+        if len(splats) == 0 or means.shape[0] == 0:
+            ch = colors.shape[-1] if (len(splats) > 0 and feature == "labels") else 3
+            z = lambda c: torch.zeros((1, height, width, c), dtype=torch.float32, device=viewmats.device)
+            return z(ch), z(1), z(1)
+
+        if feature == "labels":
+            kwargs.pop("sh_degree", None)   # labels are direct C-channel colors, not SH coefficients
         render_colors, render_alphas, _ = rasterization(
             means=means,
             quats=quats,
@@ -397,10 +419,12 @@ class Rasterizer:
             distributed=self.distributed,
             camera_model=self.camera_model,
             with_eval3d=self.with_eval3d,
-            render_mode="RGB+ED",
-            backgrounds=means.new_ones((1, 3)) if self.backgrounds == "white" else None,
+            render_mode=("RGB" if feature == "labels" else "RGB+ED"),
+            backgrounds=(means.new_ones((1, 3)) if self.backgrounds == "white" and feature != "labels" else None),
             **kwargs,
         )
+        if feature == "labels":
+            return render_colors, render_alphas, render_alphas   # render_colors: [V, H, W, C] label logits
         return render_colors[..., :3].clamp(0.0, 1.0), render_colors[..., 3:4], render_alphas
 
 
@@ -584,7 +608,7 @@ class GaussianSplatRenderer(nn.Module):
         topk_idx = torch.topk(conf, K, dim=0, largest=True, sorted=False).indices  # [K]
 
         filtered = {}
-        mask_keys = ["means", "quats", "scales", "opacities", "sh", "conf", "weights"]
+        mask_keys = ["means", "quats", "scales", "opacities", "sh", "conf", "weights", "labels"]
 
         for key in splats.keys():
             if key in mask_keys and key in splats:
@@ -705,6 +729,13 @@ class GaussianSplatRenderer(nn.Module):
         splats["means"] = pts3d
         splats["conf"] = conf.reshape(B, S, H * W)
 
+        # Semantic labels: one-hot per-pixel class, carried as a Gaussian attribute (parallel to sh/color).
+        # Rendering one-hot vectors and taking argmax gives a view-consistent semantic image.
+        if "labels" in views:
+            lbl = views["labels"][:, :S].reshape(B, S, H * W).long()                  # [B, S, H*W]
+            num_classes = int(views["labels"].max().item()) + 1
+            splats["labels"] = F.one_hot(lbl, num_classes).to(splats["means"].dtype)  # [B, S, H*W, C]
+
         splats["timestamp"] = views["timestamp"][:, :S]
         if "velocity_fwd" in predictions:
             camera2world = pose4x4.reshape(B, S, 4, 4)
@@ -779,7 +810,10 @@ class GaussianSplatRenderer(nn.Module):
 
         s_idx, n_idx = constant_indices[:, 0], constant_indices[:, 1]
         constant_splats = {}
-        for key in ["means", "quats", "scales", "opacities", "sh", "conf", "weights"]:
+        keys = ["means", "quats", "scales", "opacities", "sh", "conf", "weights"]
+        if "labels" in splats:
+            keys = keys + ["labels"]
+        for key in keys:
             constant_splats[key] = splats[key][batch_idx][s_idx, n_idx]
 
         # Apply confidence filtering before pruning
@@ -797,6 +831,7 @@ class GaussianSplatRenderer(nn.Module):
             scales=constant_splats["scales"],
             rotations=constant_splats["quats"],
             confidences=constant_splats["conf"],
+            labels=constant_splats.get("labels"),
             timestamp=-1,
         )
         return gaussians
@@ -821,6 +856,7 @@ class GaussianSplatRenderer(nn.Module):
                     scales=splats["scales"][batch_idx, s][dynamic_mask],
                     rotations=splats["quats"][batch_idx, s][dynamic_mask],
                     confidences=splats["conf"][batch_idx, s][dynamic_mask],
+                    labels=splats["labels"][batch_idx, s][dynamic_mask] if "labels" in splats else None,
                     timestamp=splats["timestamp"][batch_idx, s].item(),
                     life_span=splats["weights"][batch_idx, s][dynamic_mask],
                     life_span_gamma=self.life_span_gamma,
