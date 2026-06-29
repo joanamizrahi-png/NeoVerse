@@ -883,7 +883,10 @@ class WanVideoUnit_NoiseInitializer(PipelineUnit):
 
     def process(self, pipe: WanVideoNeoVersePipeline, height, width, num_frames, seed, rand_device):
         length = (num_frames - 1) // 4 + 1
-        shape = (1, pipe.vae.model.z_dim, length, height // pipe.vae.upsampling_factor, width // pipe.vae.upsampling_factor)
+        # SEMANTIC FINETUNE (guarded; default 0 -> unchanged): extra latent channels for
+        # the jointly-generated semantic map, so noise matches the 32-ch input_latents.
+        z_dim = pipe.vae.model.z_dim + getattr(pipe, "semantic_channels", 0)
+        shape = (1, z_dim, length, height // pipe.vae.upsampling_factor, width // pipe.vae.upsampling_factor)
         noise = pipe.generate_noise(shape, seed=seed, rand_device=rand_device)
         return {"noise": noise}
 
@@ -892,16 +895,26 @@ class WanVideoUnit_NoiseInitializer(PipelineUnit):
 class WanVideoUnit_InputVideoEmbedder(PipelineUnit):
     def __init__(self):
         super().__init__(
-            input_params=("input_video", "noise", "tiled", "tile_size", "tile_stride"),
+            # "semantic_labels" added for the semantic finetune (None on normal RGB runs).
+            input_params=("input_video", "semantic_labels", "noise", "tiled", "tile_size", "tile_stride"),
             onload_model_names=("vae",)
         )
 
-    def process(self, pipe: WanVideoNeoVersePipeline, input_video, noise, tiled, tile_size, tile_stride):
+    def process(self, pipe: WanVideoNeoVersePipeline, input_video, semantic_labels, noise, tiled, tile_size, tile_stride):
         if input_video is None:
             return {"latents": noise}
         pipe.load_models_to_device(["vae"])
         input_video = pipe.preprocess_video(input_video)
         input_latents = pipe.vae.encode(input_video, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
+        # SEMANTIC FINETUNE (guarded; inert unless pipe.semantic_channels>0 AND labels given):
+        # colorize the clean SAM3 labels, encode through the SAME VAE, and channel-concat
+        # so the DiT GENERATES [RGB ; semantic] jointly. (See docs/FINETUNE_IMPLEMENTATION.md)
+        if getattr(pipe, "semantic_channels", 0) > 0 and semantic_labels is not None:
+            from ..utils.semantics import labels_to_rgb
+            sem_rgb = labels_to_rgb(semantic_labels).permute(0, 1, 4, 2, 3)   # [B,T,H,W]->[B,T,3,H,W]
+            sem_rgb = pipe.preprocess_video(sem_rgb)
+            sem_latents = pipe.vae.encode(sem_rgb, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
+            input_latents = torch.cat([input_latents, sem_latents], dim=1)    # [B,16,..]->[B,32,..]
         if pipe.scheduler.training:
             return {"latents": noise, "input_latents": input_latents}
         else:
