@@ -23,13 +23,24 @@ from sam3.model.sam3_image_processor import Sam3Processor
 
 # --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
 CLASSES = [
-    ("road",     (128, 128, 128), True),
-    ("sidewalk", (210, 180, 140), True),
-    ("grass",    (0,   180, 0),   True),
-    ("building", (140, 70,  20),  False),
-    ("car",      (0,   0,   255), False),
-    ("person",   (255, 0,   0),   False),
-    ("tree",     (34,  139, 34),  False),
+    # Traversable
+    ("road",       (128, 128, 128), True),
+    ("sidewalk",   (210, 180, 140), True),
+    ("grass",      (0,   180, 0),   True),
+    ("path",       (139, 90,  43),  True),   # dirt path, gravel trail
+    # Non-traversable, ground-level
+    ("water",      (30,  80,  220), False),
+    ("stairs",     (180, 100, 30),  False),
+    # Non-traversable, vertical
+    ("building",   (140, 70,  20),  False),
+    ("fence",      (100, 60,  100), False),
+    ("vegetation", (34,  139, 34),  False),  # tree + bushes + foliage merged
+    # Dynamic obstacles
+    ("car",        (0,   0,   255), False),
+    ("bicycle",    (255, 165, 0),   False),
+    ("person",     (255, 0,   0),   False),
+    # Reference / background
+    ("sky",        (135, 206, 235), False),
 ]
 BPE = "/home/joana/joana/sam3_assets/bpe_simple_vocab_16e6.txt.gz"
 

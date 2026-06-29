@@ -1,0 +1,36 @@
+# Training clip sources for the SAM3 pilot dataset.
+# Format: youtube-url, start-time, end-time, short-name
+# (~10-second segments work best — matches NeoVerse's 81-frame input window at ~8 fps.)
+#
+# Lines starting with # are ignored. Edit and add entries below.
+#
+# Suggested mix (~50 clips total):
+#   ~10 driving / dashcam
+#   ~15 sidewalk walking (city POV)
+#   ~10 off-road / hiking trail POV
+#   ~10 campus / university walks
+#   ~5 dense urban with people / bikes
+#
+# Channel suggestions:
+#   - "POPtravel" / "ProWalk Tours" — city walks
+#   - "Watched Walker" / "Walking the World" — city POV
+#   - "POV Walker" / "4K Walks" — urban walks
+#   - "Walking the trails" — hiking POV
+#
+# Tip: pick the most visually diverse segment of each video — middle of the walk
+# rather than the intro / ending.
+
+# === driving / dashcam ===
+# https://www.youtube.com/watch?v=XXXXX, 0:30, 0:42, dashcam_01
+
+# === sidewalk walking ===
+# https://www.youtube.com/watch?v=XXXXX, 1:15, 1:27, sidewalk_01
+
+# === off-road / hiking ===
+# https://www.youtube.com/watch?v=XXXXX, 0:00, 0:12, trail_01
+
+# === campus / university ===
+# https://www.youtube.com/watch?v=XXXXX, 0:45, 0:57, campus_01
+
+# === urban with people / bikes ===
+# https://www.youtube.com/watch?v=XXXXX, 2:00, 2:12, urban_dense_01
