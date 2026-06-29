@@ -28,13 +28,19 @@ CLASSES = [
     ("sidewalk",   (210, 180, 140), True),
     ("grass",      (0,   180, 0),   True),
     ("path",       (139, 90,  43),  True),   # dirt path, gravel trail
+    ("dirt",       (190, 150, 90),  True),   # dirt / packed earth trail
+    ("gravel",     (150, 140, 120), True),   # gravel / small loose stones
+    ("mulch",      (80,  50,  20),  True),   # mulch / leaf litter
     # Non-traversable, ground-level
     ("water",      (30,  80,  220), False),
+    ("rock",       (190, 190, 190), False),  # rocks / boulders (creek bed)
+    ("log",        (230, 170, 120), False),  # fallen logs
     ("stairs",     (180, 100, 30),  False),
     # Non-traversable, vertical
     ("building",   (140, 70,  20),  False),
     ("fence",      (100, 60,  100), False),
-    ("vegetation", (34,  139, 34),  False),  # tree + bushes + foliage merged
+    ("vegetation", (34,  139, 34),  False),  # trees / tall foliage
+    ("bush",       (80,  130, 50),  False),  # low bushes / shrubs
     # Dynamic obstacles
     ("car",        (0,   0,   255), False),
     ("bicycle",    (255, 165, 0),   False),

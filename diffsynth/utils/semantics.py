@@ -17,21 +17,30 @@ import torch
 
 # Class index -> RGB color. Index 0 = unlabeled/background. MUST match the class order
 # in sam3_precompute_labels.CLASSES (13 classes + background).
+# NOTE: for the finetune's colorize->VAE->decode roundtrip, well-SEPARATED colors decode
+# more robustly. These are kept human-readable for now; if nearest-color decode is shaky
+# after VAE noise, swap to a max-spread palette (the class IDs are what matter, not the hues).
 CLASS_COLORS = torch.tensor([
-    [0,   0,   0],     # 0 unlabeled
-    [128, 128, 128],   # 1 road
-    [210, 180, 140],   # 2 sidewalk
-    [0,   180, 0],     # 3 grass
-    [139, 90,  43],    # 4 path
-    [30,  80,  220],   # 5 water
-    [180, 100, 30],    # 6 stairs
-    [140, 70,  20],    # 7 building
-    [100, 60,  100],   # 8 fence
-    [34,  139, 34],    # 9 vegetation
-    [0,   0,   255],   # 10 car
-    [255, 165, 0],     # 11 bicycle
-    [255, 0,   0],     # 12 person
-    [135, 206, 235],   # 13 sky
+    [0,   0,   0],     # 0  unlabeled
+    [128, 128, 128],   # 1  road
+    [210, 180, 140],   # 2  sidewalk
+    [0,   180, 0],     # 3  grass
+    [139, 90,  43],    # 4  path
+    [190, 150, 90],    # 5  dirt
+    [150, 140, 120],   # 6  gravel
+    [80,  50,  20],    # 7  mulch
+    [30,  80,  220],   # 8  water
+    [190, 190, 190],   # 9  rock
+    [230, 170, 120],   # 10 log
+    [180, 100, 30],    # 11 stairs
+    [140, 70,  20],    # 12 building
+    [100, 60,  100],   # 13 fence
+    [34,  139, 34],    # 14 vegetation
+    [80,  130, 50],    # 15 bush
+    [0,   0,   255],   # 16 car
+    [255, 165, 0],     # 17 bicycle
+    [255, 0,   0],     # 18 person
+    [135, 206, 235],   # 19 sky
 ], dtype=torch.float32) / 255.0          # [K, 3], values in [0, 1]
 NUM_CLASSES = CLASS_COLORS.shape[0]
 

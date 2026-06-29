@@ -11,6 +11,34 @@ based on **semantic traversability** (is the robot's next foot-placement on
 walkable terrain?). Deploy on a real robot (Unitree Go2 / Gitamini). Real-world
 transfer is the key novelty.
 
+## ⭐ CURRENT STATUS (2026-06-29) — read this first
+
+**Corrected design (the diffusion INPAINTS, it does NOT replace SAM3):**
+SAM3/RUGD labels → 3D-fuse onto Gaussians → render at a view → **holey** semantic → the
+diffusion **fills the holes** → clean semantic. SAM3 runs once per scene (at reconstruction),
+not per RL step. This is consistent with how NeoVerse already inpaints rough RGB → clean RGB.
+- Training example = `(holey rendered semantic + rough RGB)` → `(clean semantic)`.
+- Label source = ONE consistent choice: **RUGD annotations** (clean, to de-risk first) or SAM3
+  (for scaling to non-RUGD video later). **Do NOT mix** (SAM3 input + RUGD target = mismatch).
+
+**Running (overnight, detached):** RUGD frames + annotations downloading to `~/joana/rugd_full/`
+(`RUGD_frames-with-annotations/` + `RUGD_annotations/`). HF rate-limits → slow but resuming.
+Logs: `rugd_download.log`, `rugd_annotations_download.log`.
+
+**Code state:** the OUTPUT/generation-target half is scaffolded + committed
+(`diffsynth/utils/semantics.py` + the `input_latents` concat, guarded by `pipe.semantic_channels`).
+**Still TODO:** the CONDITIONING half — control branch takes the holey semantic like depth
+(`wan_video_neoverse_controller.py` ~L91, `control_in_dim` 96→112, zero-init).
+
+**NEXT (tomorrow):**
+1. Verify both downloads finished (`ls ~/joana/rugd_full/RUGD_*`).
+2. Chunk RUGD frames → clips (`scripts/prepare_rugd_clips.py`) + pair each frame w/ its RUGD mask.
+3. Add the conditioning edit (control branch + holey semantic render).
+4. Dataloader: feed RUGD masks as the clean target.
+5. Cluster smoke-test: overfit ONE clip (training can't run on the Jetson).
+
+See `docs/FINETUNE_IMPLEMENTATION.md` for the exact edits.
+
 ## How NeoVerse works (3 layers)
 
 1. **Reconstruct (3D):** feed-forward WorldMirror/VGGT-based reconstructor →
