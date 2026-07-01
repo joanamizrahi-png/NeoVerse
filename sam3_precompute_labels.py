@@ -22,31 +22,35 @@ from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
 
 # --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
+# RUGD's official 24-class taxonomy (class ids 1..24; void=0 handled as "unlabeled").
+# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] (RUGD colormap),
+# so SAM3 pseudo-labels and RUGD ground-truth masks share one class space (no taxonomy
+# translation for the diffusion). The name is the SAM3 text prompt; bool = traversable.
 CLASSES = [
-    # Traversable
-    ("road",       (128, 128, 128), True),
-    ("sidewalk",   (210, 180, 140), True),
-    ("grass",      (0,   180, 0),   True),
-    ("path",       (139, 90,  43),  True),   # dirt path, gravel trail
-    ("dirt",       (190, 150, 90),  True),   # dirt / packed earth trail
-    ("gravel",     (150, 140, 120), True),   # gravel / small loose stones
-    ("mulch",      (80,  50,  20),  True),   # mulch / leaf litter
-    # Non-traversable, ground-level
-    ("water",      (30,  80,  220), False),
-    ("rock",       (190, 190, 190), False),  # rocks / boulders (creek bed)
-    ("log",        (230, 170, 120), False),  # fallen logs
-    ("stairs",     (180, 100, 30),  False),
-    # Non-traversable, vertical
-    ("building",   (140, 70,  20),  False),
-    ("fence",      (100, 60,  100), False),
-    ("vegetation", (34,  139, 34),  False),  # trees / tall foliage
-    ("bush",       (80,  130, 50),  False),  # low bushes / shrubs
-    # Dynamic obstacles
-    ("car",        (0,   0,   255), False),
-    ("bicycle",    (255, 165, 0),   False),
-    ("person",     (255, 0,   0),   False),
-    # Reference / background
-    ("sky",        (135, 206, 235), False),
+    ("dirt",                     (108, 64,  20),  True),
+    ("sand",                     (255, 229, 204), True),
+    ("grass",                    (0,   102, 0),   True),
+    ("tree",                     (0,   255, 0),   False),
+    ("pole",                     (0,   153, 153), False),
+    ("water",                    (0,   128, 255), False),
+    ("sky",                      (0,   0,   255), False),
+    ("vehicle",                  (255, 255, 0),   False),
+    ("container",                (255, 0,   127), False),   # container / generic object
+    ("asphalt",                  (64,  64,  64),  True),
+    ("gravel",                   (255, 128, 0),   True),
+    ("building",                 (255, 0,   0),   False),
+    ("mulch",                    (153, 76,  0),   True),
+    ("rock bed",                 (102, 102, 0),   False),   # rocky creek bed
+    ("log",                      (102, 0,   0),   False),
+    ("bicycle",                  (0,   255, 128), False),
+    ("person",                   (204, 153, 255), False),
+    ("fence",                    (102, 0,   204), False),
+    ("bush",                     (255, 153, 204), False),
+    ("sign",                     (0,   102, 102), False),
+    ("rock",                     (153, 204, 255), False),
+    ("bridge",                   (102, 255, 255), True),
+    ("concrete",                 (101, 101, 11),  True),
+    ("picnic table",             (114, 85,  47),  False),
 ]
 BPE = "/home/joana/joana/sam3_assets/bpe_simple_vocab_16e6.txt.gz"
 

@@ -15,32 +15,37 @@ UNTESTED — pending a cluster smoke-test (training can't run on the Jetson).
 import math
 import torch
 
-# Class index -> RGB color. Index 0 = unlabeled/background. MUST match the class order
-# in sam3_precompute_labels.CLASSES (13 classes + background).
-# NOTE: for the finetune's colorize->VAE->decode roundtrip, well-SEPARATED colors decode
-# more robustly. These are kept human-readable for now; if nearest-color decode is shaky
-# after VAE noise, swap to a max-spread palette (the class IDs are what matter, not the hues).
+# Class index -> RGB color = RUGD's OFFICIAL 24-class colormap (index 0 = void/unlabeled),
+# extracted+verified from the RUGD annotation masks. Single source of truth: SAM3 prompts
+# (sam3_precompute_labels.CLASSES), RUGD ground-truth masks, and this decode table all share
+# this taxonomy -> hint (SAM3) and clean target (RUGD) live in the SAME class space, so the
+# diffusion only DENOISES/INPAINTS, never translates taxonomies.
 CLASS_COLORS = torch.tensor([
-    [0,   0,   0],     # 0  unlabeled
-    [128, 128, 128],   # 1  road
-    [210, 180, 140],   # 2  sidewalk
-    [0,   180, 0],     # 3  grass
-    [139, 90,  43],    # 4  path
-    [190, 150, 90],    # 5  dirt
-    [150, 140, 120],   # 6  gravel
-    [80,  50,  20],    # 7  mulch
-    [30,  80,  220],   # 8  water
-    [190, 190, 190],   # 9  rock
-    [230, 170, 120],   # 10 log
-    [180, 100, 30],    # 11 stairs
-    [140, 70,  20],    # 12 building
-    [100, 60,  100],   # 13 fence
-    [34,  139, 34],    # 14 vegetation
-    [80,  130, 50],    # 15 bush
-    [0,   0,   255],   # 16 car
-    [255, 165, 0],     # 17 bicycle
-    [255, 0,   0],     # 18 person
-    [135, 206, 235],   # 19 sky
+    [0,   0,   0],     # 0  void / unlabeled
+    [108, 64,  20],    # 1  dirt
+    [255, 229, 204],   # 2  sand
+    [0,   102, 0],     # 3  grass
+    [0,   255, 0],     # 4  tree
+    [0,   153, 153],   # 5  pole
+    [0,   128, 255],   # 6  water
+    [0,   0,   255],   # 7  sky
+    [255, 255, 0],     # 8  vehicle
+    [255, 0,   127],   # 9  container / generic-object
+    [64,  64,  64],    # 10 asphalt
+    [255, 128, 0],     # 11 gravel
+    [255, 0,   0],     # 12 building
+    [153, 76,  0],     # 13 mulch
+    [102, 102, 0],     # 14 rock-bed
+    [102, 0,   0],     # 15 log
+    [0,   255, 128],   # 16 bicycle
+    [204, 153, 255],   # 17 person
+    [102, 0,   204],   # 18 fence
+    [255, 153, 204],   # 19 bush
+    [0,   102, 102],   # 20 sign
+    [153, 204, 255],   # 21 rock
+    [102, 255, 255],   # 22 bridge
+    [101, 101, 11],    # 23 concrete
+    [114, 85,  47],    # 24 picnic-table
 ], dtype=torch.float32) / 255.0          # [K, 3], values in [0, 1]
 NUM_CLASSES = CLASS_COLORS.shape[0]
 
