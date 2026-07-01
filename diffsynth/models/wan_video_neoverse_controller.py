@@ -85,10 +85,20 @@ class NeoVerseControlBranch(torch.nn.Module):
         context,
         t_mod,
         freqs,
+        target_semantic_latents=None,   # [B, C, T, H, W] — semantic finetune (see docs/FINETUNE_IMPLEMENTATION.md)
         use_gradient_checkpointing: bool = False,
         use_gradient_checkpointing_offload: bool = False,
     ):
-        target_latents = torch.cat((target_rgb_latents, target_depth_latents), dim=1)
+        # SEMANTIC FINETUNE: if a semantic latent is provided, insert it BETWEEN
+        # the RGB+depth latents and the mask/cam encoding. The control_patch_embedding
+        # must have been expanded via expand_control_branch_for_semantics() so its
+        # in_channels are 96 + <semantic_channels>. Otherwise leave the old 2-way cat.
+        if target_semantic_latents is not None:
+            target_latents = torch.cat(
+                (target_rgb_latents, target_depth_latents, target_semantic_latents), dim=1
+            )
+        else:
+            target_latents = torch.cat((target_rgb_latents, target_depth_latents), dim=1)
         target_mask_cams = torch.cat((target_masks, target_cams), dim=2).permute(0, 2, 1, 3, 4) # [B, C, T, H, W]
         target_mask_cams = F.pad(target_mask_cams, self.control_mask_padding, mode="constant", value=0)
         target_mask_cams = self.control_mask_cam_embedding(target_mask_cams)

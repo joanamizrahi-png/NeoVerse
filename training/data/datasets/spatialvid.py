@@ -25,8 +25,17 @@ def VideoReader_contextmanager(*args, **kwargs):
 
 
 class SpatialVID(BaseDataset):
-    def __init__(self, ROOT, *args, **kwargs):
+    def __init__(self, ROOT, labels_dir=None, *args, **kwargs):
+        """
+        Args:
+            ROOT: SpatialVID root directory.
+            labels_dir: (semantic finetune) directory containing per-clip SAM3 label npz
+                files, named "<scene_id>.npz" with a "labels" array of shape
+                [N_total_frames, H, W] int8 that matches the raw video's frame count.
+                If None, no labels are loaded and normal RGB training proceeds unchanged.
+        """
         self.ROOT = ROOT
+        self.labels_dir = labels_dir
         super().__init__(*args, **kwargs)
         self.loaded_data = self._load_data()
 
@@ -57,6 +66,19 @@ class SpatialVID(BaseDataset):
             captions = json.load(f)
             text_prompt = captions["SceneDescription"]
 
+        # SEMANTIC FINETUNE (guarded): if a labels_dir is configured and a per-clip npz
+        # exists, load per-frame semantic label maps aligned to the SAME sampled frame
+        # indices we used above. per_frame_labels[v] is None on rows where the clip has
+        # no precomputed labels; the downstream 4DPreprocesser only renders the semantic
+        # feature when source_views has a "labels" tensor.
+        per_frame_labels = None
+        if self.labels_dir is not None:
+            labels_path = osp.join(self.labels_dir, f"{scene_info['id']}.npz")
+            if osp.exists(labels_path):
+                with np.load(labels_path) as d:
+                    all_labels = d["labels"]                # [N_total, H, W] int8
+                per_frame_labels = all_labels[sample_index]  # [num_views, H, W]
+
         context_views = []
         target_views = []
         for v, rgb_image in enumerate(images):
@@ -64,31 +86,24 @@ class SpatialVID(BaseDataset):
             rgb_image, *_ = self._crop_resize_if_necessary(
                 rgb_image, (self.width, self.height), rng=rng, info=(idx, v),
             )
-            if sample_index[v] in sample_context_index:
-                context_views.append(
-                    dict(
-                        img=rgb_image,
-                        dataset="SpatialVID",
-                        video_name=scene_info["id"],
-                        image_name=f"frame_{sample_index[v]:06d}",
-                        is_static=False,
-                        is_target=False,
-                        timestamp=timestamp,
-                        prompt=text_prompt,
-                    )
-                )
+            view = dict(
+                img=rgb_image,
+                dataset="SpatialVID",
+                video_name=scene_info["id"],
+                image_name=f"frame_{sample_index[v]:06d}",
+                is_static=False,
+                is_target=sample_index[v] not in sample_context_index,
+                timestamp=timestamp,
+                prompt=text_prompt,
+            )
+            if per_frame_labels is not None:
+                # NOTE: labels are NOT crop/resized here — they should already match the
+                # video resolution (that's how sam3_precompute_labels.py saves them, using
+                # load_video with the same width/height as this dataset).
+                view["labels"] = per_frame_labels[v]
+            if view["is_target"]:
+                target_views.append(view)
             else:
-                target_views.append(
-                    dict(
-                        img=rgb_image,
-                        dataset="SpatialVID",
-                        video_name=scene_info["id"],
-                        image_name=f"frame_{sample_index[v]:06d}",
-                        is_static=False,
-                        is_target=True,
-                        timestamp=timestamp,
-                        prompt=text_prompt,
-                    )
-                )
+                context_views.append(view)
         views = context_views + target_views
         return views

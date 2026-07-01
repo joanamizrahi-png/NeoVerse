@@ -11,33 +11,117 @@ based on **semantic traversability** (is the robot's next foot-placement on
 walkable terrain?). Deploy on a real robot (Unitree Go2 / Gitamini). Real-world
 transfer is the key novelty.
 
-## ⭐ CURRENT STATUS (2026-06-29) — read this first
+## ⭐ CURRENT STATUS (2026-07-01) — read this first
 
-**Corrected design (the diffusion INPAINTS, it does NOT replace SAM3):**
+**Design (unchanged, INPAINTING, not co-denoising from scratch):**
 SAM3/RUGD labels → 3D-fuse onto Gaussians → render at a view → **holey** semantic → the
 diffusion **fills the holes** → clean semantic. SAM3 runs once per scene (at reconstruction),
-not per RL step. This is consistent with how NeoVerse already inpaints rough RGB → clean RGB.
-- Training example = `(holey rendered semantic + rough RGB)` → `(clean semantic)`.
-- Label source = ONE consistent choice: **RUGD annotations** (clean, to de-risk first) or SAM3
-  (for scaling to non-RUGD video later). **Do NOT mix** (SAM3 input + RUGD target = mismatch).
+not per RL step. Consistent with how NeoVerse already inpaints rough RGB → clean RGB.
+- Training example = `(rough RGB + rough depth + rough HOLEY semantic + clean RGB target + clean semantic target)`.
+- Label source (agreed): **SAM3-on-input-frames** = the input hint (attached to Gaussians →
+  reconstructor renders the holey view). **RUGD ground-truth masks** = the CLEAN training target.
+  This means during deployment we only need SAM3, but training uses RUGD's cleaner labels.
 
-**Running (overnight, detached):** RUGD frames + annotations downloading to `~/joana/rugd_full/`
-(`RUGD_frames-with-annotations/` + `RUGD_annotations/`). HF rate-limits → slow but resuming.
-Logs: `rugd_download.log`, `rugd_annotations_download.log`.
+### DONE THIS SESSION (Mac side, all guarded — RGB-only runs unchanged)
 
-**Code state:** the OUTPUT/generation-target half is scaffolded + committed
-(`diffsynth/utils/semantics.py` + the `input_latents` concat, guarded by `pipe.semantic_channels`).
-**Still TODO:** the CONDITIONING half — control branch takes the holey semantic like depth
-(`wan_video_neoverse_controller.py` ~L91, `control_in_dim` 96→112, zero-init).
+The full diffusion-side wiring for semantic finetune is now in place. Everything is guarded
+by `pipe.semantic_channels > 0` and defaults to inert.
 
-**NEXT (tomorrow):**
-1. Verify both downloads finished (`ls ~/joana/rugd_full/RUGD_*`).
-2. Chunk RUGD frames → clips (`scripts/prepare_rugd_clips.py`) + pair each frame w/ its RUGD mask.
-3. Add the conditioning edit (control branch + holey semantic render).
-4. Dataloader: feed RUGD masks as the clean target.
-5. Cluster smoke-test: overfit ONE clip (training can't run on the Jetson).
+**1. Model surgery** (`diffsynth/utils/semantics.py`):
+- `labels_to_rgb` / `rgb_to_labels` — the colorize/decolorize trick (was already there).
+- `expand_dit_for_semantics(dit, extra=16)` — grows DiT input patch-embed + output head from
+  16→32 latent channels. Zero-init new channels; pretrained RGB behavior unchanged at step 0.
+- `expand_control_branch_for_semantics(control_branch, extra=16)` — **NEW**. Grows
+  `control_patch_embedding` from Conv3d(96, dim) → Conv3d(112, dim). Inserts new channels
+  **between** the latent block (RGB+depth, positions 0-31) and the mask_cam block
+  (shifted 32-95 → 48-111). Zero-init new channels.
 
-See `docs/FINETUNE_IMPLEMENTATION.md` for the exact edits.
+**2. Control branch** (`diffsynth/models/wan_video_neoverse_controller.py`):
+- `NeoVerseControlBranch.forward()` gained `target_semantic_latents=None` optional kwarg
+  positioned between `freqs` and `use_gradient_checkpointing`. When provided, `target_latents`
+  becomes a 3-way cat (RGB + depth + semantic).
+
+**3. Pipeline plumbing** (`diffsynth/pipelines/wan_video_neoverse.py`):
+- `WanVideoUnit_4DPreprocesser.process()` runs a second rasterizer pass with `feature="labels"`
+  at the target trajectory when `pipe.semantic_channels > 0` AND `source_views["labels"]` is
+  present. Argmaxes to `[B,T,H,W]` class-id tensor, timestamp-sorted. Emitted as `target_semantic`.
+- `WanVideoUnit_4DEmbedder` now accepts `target_semantic` (class ids), colorizes → permutes →
+  `preprocess_video` → VAE-encode → `target_semantic_latents`. Returns `None` on RGB-only.
+- `model_fn_wan_video` gained `target_semantic=None`. **CRITICAL**: converted the
+  `control_branch(...)` call to keyword args because the controller's new positional param
+  would silently misalign old-style positional calls.
+- `WanVideoUnit_InputVideoEmbedder` uses `semantic_labels` (**the clean target**) to build the
+  32-ch `input_latents`. This was already in place from the earlier session.
+
+**4. Dataloader** (`training/data/datasets/spatialvid.py`):
+- Constructor takes `labels_dir=None` (path to per-clip SAM3 `.npz`).
+- If set, loads `<scene_id>.npz` and indexes by the sampled frame indices → per-view `labels`
+  attached to each view dict. `compose_batches_from_list` auto-batches new tensor fields.
+- Refactored the context/target loop to a single dict (functional-identical to before).
+
+**5. Training entry** (`train.py`):
+- `WanTrainingModule.__init__(semantic_channels=0)`. If > 0, calls
+  `expand_dit_for_semantics` + `expand_control_branch_for_semantics` AFTER checkpoint load,
+  BEFORE freeze/LoRA setup.
+- Config plumb: `semantic_channels=int(getattr(args, "semantic_channels", 0))` in `__main__`.
+
+### End-to-end flow when `semantic_channels: 16` is set in the config
+
+```
+dataloader (SpatialVID with labels_dir)
+    → view dicts contain "labels" (SAM3 int class ids per frame)
+train.py forward_preprocess
+    → inputs_shared["source_views"] = data
+WanVideoUnit_4DPreprocesser
+    → reconstructor(source_views with labels) → Gaussians with labels attached
+    → rasterizer.forward(feature="rgb")    → target_rgb
+    → rasterizer.forward(feature="depth")  → target_depth  (via existing depth path)
+    → rasterizer.forward(feature="labels") → argmax → target_semantic  (holey)
+WanVideoUnit_4DEmbedder
+    → VAE-encodes target_rgb → target_rgb_latents
+    → VAE-encodes target_depth → target_depth_latents
+    → colorize + VAE-encodes target_semantic → target_semantic_latents
+WanVideoUnit_InputVideoEmbedder
+    → VAE-encodes input_video → 16-ch input_latents
+    → colorize + VAE-encodes semantic_labels (CLEAN target) → concat → 32-ch input_latents
+model_fn_wan_video → control_branch(target_semantic_latents=…) → hints
+    → DiT (expanded 16→32 in/out) → 32-ch noise_pred
+training_loss → MSE(noise_pred, training_target from 32-ch input_latents)
+```
+
+### STILL TODO (the last-mile leak)
+
+**`semantic_labels` (the clean training target) is not populated by the dataloader yet.**
+`WanVideoUnit_InputVideoEmbedder` reads it but it's currently always None. Two options for
+the pilot smoke-test:
+
+- **Option A (self-supervised sanity)**: set `semantic_labels = per_frame_labels` from the
+  dataloader (same SAM3 labels used for the input hint). Trains the diffusion to reproduce
+  its own SAM3 labels. Validates plumbing, doesn't validate the "clean-up" goal.
+- **Option B (real training)**: add a `target_labels_dir` config that points to RUGD
+  ground-truth masks. Wire a second load in the dataloader; `forward_preprocess` puts them
+  into `inputs_shared["semantic_labels"]`.
+
+Recommended: do Option A first (5-line change, unblocks the cluster smoke-test), then
+Option B once RUGD annotations are unpacked and clip↔mask pairing is confirmed.
+
+**Other TODOs still valid from the previous session's `docs/FINETUNE_IMPLEMENTATION.md`:**
+- Freezing pattern in `train.py` (currently uses the existing `trainable_models` flag — needs
+  a cluster config that unfreezes only `patch_embedding` + `head` + a small LoRA).
+- Inference decode: split 32-ch DiT output, VAE-decode semantic half, `rgb_to_labels` →
+  class map. Not needed for training, but needed for eval / RL rollouts.
+- Smoke-test: overfit ONE clip on the cluster; verify total loss drops + decoded semantic
+  half looks recognizable.
+
+### Data status
+- RUGD download to `~/joana/rugd_full/` may still be in flight. `ls ~/joana/rugd_full/` to check.
+- Once complete: run `scripts/prepare_rugd_clips.py --rugd_root ~/joana/rugd_full` to chunk
+  to 81-frame MP4s. Then `scripts/run_sam3_on_pilot.sh` batches SAM3 over all clips.
+- After that: point the training config at `labels_dir=outputs/sam3_labels` and RUGD
+  ground-truth mask dir when we add Option B.
+
+See `docs/FINETUNE_IMPLEMENTATION.md` for the original design notes; this section supersedes
+the older TODO list there.
 
 ## How NeoVerse works (3 layers)
 

@@ -103,3 +103,43 @@ def expand_dit_for_semantics(dit, extra: int = 16):
         nlin.bias.data = newb.reshape(new_outc * p)
     dit.head.head = nlin
     return dit
+
+
+@torch.no_grad()
+def expand_control_branch_for_semantics(control_branch, extra: int = 16):
+    """In-place: grow control_branch.control_patch_embedding to accept `extra`
+    extra latent input channels (semantics), inserted BETWEEN the latent channels
+    (RGB + depth) and the mask/cam channels.
+
+    Current input channel layout of control_patch_embedding:
+        [RGB (16), depth (16), mask_cam (64)]  = 96
+    After expansion:
+        [RGB (16), depth (16), SEMANTIC (extra, zero-init), mask_cam (64)]  = 96 + extra
+
+    New semantic channels are ZERO-INIT, so at step 0 the control branch produces
+    the same hints as the pretrained model — only the new channels learn.
+
+    Call ONCE after loading the pretrained control branch, before training.
+    Idempotency is the caller's responsibility (don't call twice).
+    """
+    old = control_branch.control_patch_embedding
+    n_latent = 32                       # RGB (16) + depth (16), pretrained order
+    new_in = old.in_channels + extra    # e.g., 96 + 16 = 112
+
+    new = torch.nn.Conv3d(
+        new_in, old.out_channels,
+        kernel_size=old.kernel_size, stride=old.stride,
+    ).to(old.weight.device, old.weight.dtype)
+
+    new.weight.data.zero_()
+    # Copy pretrained RGB + depth weights into the first n_latent input channels
+    new.weight.data[:, :n_latent] = old.weight.data[:, :n_latent]
+    # Channels [n_latent : n_latent+extra] remain zero — semantic slot, learns from scratch
+    # Copy pretrained mask_cam weights, shifted right by `extra` channels
+    new.weight.data[:, n_latent + extra:] = old.weight.data[:, n_latent:]
+
+    if old.bias is not None:
+        new.bias.data = old.bias.data.clone()
+
+    control_branch.control_patch_embedding = new
+    return control_branch

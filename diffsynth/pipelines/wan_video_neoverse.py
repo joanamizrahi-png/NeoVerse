@@ -429,6 +429,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 "target_mask": target_mask,
                 "target_poses": target_poses,
                 "target_intrs": target_intrs,
+                "target_semantic": None,   # SEMANTIC FINETUNE: no re-rendering on caller-provided target
             }
 
         pipe.load_models_to_device(self.onload_model_names)
@@ -461,6 +462,23 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         )
         target_mask = target_alpha > self.alpha_thresh
 
+        # SEMANTIC FINETUNE (guarded): if semantic mode is on AND the source views had
+        # labels attached (via the dataloader), also render the "labels" feature at the
+        # target trajectory. Produces the ROUGH HOLEY semantic that the diffusion will
+        # inpaint into a clean semantic. Gaussians in unseen regions -> no label -> hole.
+        target_semantic = None
+        if getattr(pipe, "semantic_channels", 0) > 0 and "labels" in source_views:
+            sem_probs, _, _ = pipe.reconstructor.gs_renderer.rasterizer.forward(
+                splats,
+                render_viewmats=homo_matrix_inverse(recon_output["rendered_extrinsics"]),
+                render_Ks=recon_output["rendered_intrinsics"],
+                render_timestamps=recon_output["rendered_timestamps"],
+                sh_degree=0, width=W, height=H,
+                feature="labels",   # rasterizer routes to one-hot label channels (see rasterization.py)
+            )
+            # sem_probs: [B, T, H, W, num_classes+1] blended one-hots -> argmax per pixel
+            target_semantic = sem_probs.argmax(dim=-1).to(torch.long)   # [B, T, H, W]
+
         # Sort renderings with timestamps: convert from "context + non-context" format to temporally ordered frames
         target_poses = recon_output["rendered_extrinsics"]
         target_intrs = recon_output["rendered_intrinsics"]
@@ -473,6 +491,8 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             target_mask[b_idx] = target_mask[b_idx][order_indices]
             target_poses[b_idx] = target_poses[b_idx][order_indices]
             target_intrs[b_idx] = target_intrs[b_idx][order_indices]
+            if target_semantic is not None:
+                target_semantic[b_idx] = target_semantic[b_idx][order_indices]
 
         if input_video is not None:
             color_mask = fast_perceptual_color_distance(
@@ -502,6 +522,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             "target_mask": target_mask,
             "target_poses": target_poses,
             "target_intrs": target_intrs,
+            "target_semantic": target_semantic,   # None on RGB-only runs
         }
 
     def compose_batches_from_list(self, batch):
@@ -789,7 +810,9 @@ class WanVideoUnit_RandomDrop(PipelineUnit):
 class WanVideoUnit_4DEmbedder(PipelineUnit):
     def __init__(self):
         super().__init__(
+            # "target_semantic" added for the semantic finetune (None on normal RGB runs).
             input_params=("source_views", "target_rgb", "target_depth", "target_camera_embed", "target_mask",
+                          "target_semantic",
                           "tiled", "tile_size", "tile_stride"),
             onload_model_names=("vae",)
         )
@@ -798,6 +821,7 @@ class WanVideoUnit_4DEmbedder(PipelineUnit):
         self,
         pipe: WanVideoNeoVersePipeline,
         source_views, target_rgb, target_depth, target_camera_embed, target_mask,
+        target_semantic,
         tiled, tile_size, tile_stride
     ):
         if target_rgb is not None:
@@ -857,11 +881,28 @@ class WanVideoUnit_4DEmbedder(PipelineUnit):
                 output_path += "target_mask.mp4"
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 save_video(video, output_path, fps=15)
+            # SEMANTIC FINETUNE (guarded; inert unless pipe.semantic_channels>0 AND target_semantic given):
+            # target_semantic is a per-pixel class-id map from the rough Gaussian rasterizer
+            # (feature="labels"). Colorize -> RGB via fixed palette -> VAE-encode alongside RGB/depth.
+            # This gives the control branch a matching semantic conditioning channel.
+            target_semantic_latents = None
+            if getattr(pipe, "semantic_channels", 0) > 0 and target_semantic is not None:
+                from ..utils.semantics import labels_to_rgb
+                # target_semantic: [B, T, H, W] int class ids
+                sem_rgb = labels_to_rgb(target_semantic)                     # [B, T, H, W, 3] in [0,1]
+                sem_rgb = rearrange(sem_rgb, "B T H W C -> B T C H W")
+                sem_rgb = pipe.preprocess_video(sem_rgb)
+                target_semantic_latents = pipe.vae.encode(
+                    sem_rgb, device=pipe.device,
+                    tiled=tiled, tile_size=tile_size, tile_stride=tile_stride,
+                ).to(dtype=pipe.torch_dtype, device=pipe.device)
+
             return {
                 "target_rgb": target_rgb_latents,
                 "target_depth": target_depth_latents,
                 "target_camera_embed": target_camera_embed.to(dtype=pipe.torch_dtype, device=pipe.device),
                 "target_mask": rearrange(target_mask, "B T H W C -> B T C H W").to(dtype=pipe.torch_dtype, device=pipe.device),
+                "target_semantic": target_semantic_latents,   # None on RGB-only runs
             }
         else:
             return {}
@@ -950,6 +991,7 @@ def model_fn_wan_video(
     target_depth = None,
     target_camera_embed = None,
     target_mask = None,
+    target_semantic = None,       # SEMANTIC FINETUNE: optional VAE-encoded semantic latent
     use_gradient_checkpointing: bool = False,
     use_gradient_checkpointing_offload: bool = False,
     control_camera_latents_input = None,
@@ -982,9 +1024,16 @@ def model_fn_wan_video(
     ], dim=-1).reshape(f * h * w, 1, -1).to(x.device)
 
     if target_rgb is not None:
+        # NOTE: kwargs after `freqs` — the controller's forward() gained a new
+        # `target_semantic_latents=None` positional param between `freqs` and
+        # `use_gradient_checkpointing`. Passing by name keeps this callsite robust to
+        # further signature additions and makes intent obvious.
         control_hints = control_branch(
             x, target_rgb, target_depth, target_camera_embed, target_mask,
-            context, t_mod, freqs, use_gradient_checkpointing, use_gradient_checkpointing_offload,
+            context, t_mod, freqs,
+            target_semantic_latents=target_semantic,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+            use_gradient_checkpointing_offload=use_gradient_checkpointing_offload,
         )
 
     def create_custom_forward(module):

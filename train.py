@@ -22,6 +22,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         use_gradient_checkpointing_offload=False,
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
+        semantic_channels: int = 0,   # SEMANTIC FINETUNE: 0 = disabled (default), 16 = enabled
     ):
         super().__init__()
         # Load models
@@ -32,6 +33,19 @@ class WanTrainingModule(DiffusionTrainingModule):
             device="cpu",
             torch_dtype=torch.bfloat16,
         )
+
+        # SEMANTIC FINETUNE: expand DiT + control branch to co-denoise semantics.
+        # MUST happen AFTER loading pretrained weights but BEFORE any freezing / LoRA.
+        # Zero-init on new channels -> step 0 behavior matches pretrained RGB model.
+        if semantic_channels > 0:
+            from diffsynth.utils.semantics import (
+                expand_dit_for_semantics,
+                expand_control_branch_for_semantics,
+            )
+            self.pipe.semantic_channels = semantic_channels
+            expand_dit_for_semantics(self.pipe.dit, extra=semantic_channels)
+            if self.pipe.control_branch is not None:
+                expand_control_branch_for_semantics(self.pipe.control_branch, extra=semantic_channels)
 
         # Reset training scheduler
         self.pipe.scheduler.set_timesteps(1000, training=True)
@@ -127,6 +141,7 @@ if __name__ == "__main__":
         use_gradient_checkpointing_offload=args.use_gradient_checkpointing_offload,
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
+        semantic_channels=int(getattr(args, "semantic_channels", 0)),
     )
     optimizer = torch.optim.AdamW(model.trainable_modules(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
