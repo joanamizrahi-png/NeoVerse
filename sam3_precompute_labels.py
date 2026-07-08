@@ -22,35 +22,54 @@ from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
 
 # --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
-# RUGD's official 24-class taxonomy (class ids 1..24; void=0 handled as "unlabeled").
-# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] (RUGD colormap),
-# so SAM3 pseudo-labels and RUGD ground-truth masks share one class space (no taxonomy
-# translation for the diffusion). The name is the SAM3 text prompt; bool = traversable.
+# 29-class outdoor Go2W taxonomy (class ids 1..29; void=0 handled as "unlabeled").
+# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] and TRAVERSABLE
+# flags MUST match nav-rl/src/env/reward.py TRAVERSABLE. Ordering encodes SAM3 priority (later
+# wins) AND the class-id space — all three files must be updated in lockstep.
+#
+# Priority layering (bottom → top):
+#   sky → ground materials → ground hazards → pavement materials → pavement functions →
+#   large statics → vegetation → small verticals + stairs → dynamic objects.
+# Dynamics come last so a person/vehicle on a road stays labeled person/vehicle.
 CLASSES = [
-    ("dirt",                     (108, 64,  20),  True),
-    ("sand",                     (255, 229, 204), True),
-    ("grass",                    (0,   102, 0),   True),
-    ("tree",                     (0,   255, 0),   False),
-    ("pole",                     (0,   153, 153), False),
-    ("water",                    (0,   128, 255), False),
-    ("sky",                      (0,   0,   255), False),
-    ("vehicle",                  (255, 255, 0),   False),
-    ("container",                (255, 0,   127), False),   # container / generic object
-    ("asphalt",                  (64,  64,  64),  True),
-    ("gravel",                   (255, 128, 0),   True),
-    ("building",                 (255, 0,   0),   False),
-    ("mulch",                    (153, 76,  0),   True),
-    ("rock bed",                 (102, 102, 0),   False),   # rocky creek bed
-    ("log",                      (102, 0,   0),   False),
-    ("bicycle",                  (0,   255, 128), False),
-    ("person",                   (204, 153, 255), False),
-    ("fence",                    (102, 0,   204), False),
-    ("bush",                     (255, 153, 204), False),
-    ("sign",                     (0,   102, 102), False),
-    ("rock",                     (153, 204, 255), False),
-    ("bridge",                   (102, 255, 255), True),
-    ("concrete",                 (101, 101, 11),  True),
-    ("picnic table",             (114, 85,  47),  False),
+    # ambient
+    ("sky",           (200, 225, 245), False),
+    # ground materials (default ground layer)
+    ("dirt",          (139,  90,  43), True),   # FLAG: revisit — may not be Go2W-traversable when loose
+    ("sand",          (230, 200, 155), True),   # FLAG: revisit — loose sand may not be Go2W-traversable
+    ("grass",         ( 75, 190,  80), True),
+    ("gravel",        (180, 155, 100), True),
+    ("mulch",         (110,  55,  25), True),
+    # ground hazards
+    ("mud",           ( 55,  55,  30), False),
+    ("water",         ( 50, 120, 200), False),
+    ("rock",          (135, 145, 155), False),
+    # pavement materials
+    ("asphalt",       ( 55,  55,  65), True),
+    ("concrete",      (225, 220, 190), True),
+    # pavement functions (override materials for paved surfaces)
+    ("road",          (110, 110, 115), True),
+    ("sidewalk",      (180, 180, 180), True),
+    ("crosswalk",     (255, 250, 235), True),
+    # large vertical statics
+    ("building",      (170,  75,  60), False),
+    ("wall",          (175, 145, 175), False),
+    ("fence",         ( 90,  60, 130), False),
+    ("bridge",        ( 75, 155, 175), True),
+    # vegetation
+    ("tree",          ( 40, 105,  55), False),
+    ("vegetation",    (170, 200,  55), False),  # was 'bush' in RUGD; broadened to shrubs/undergrowth
+    ("log",           (135, 115,  90), False),
+    # small vertical + climbable
+    ("stairs",        (220, 140,  80), True),   # Go2W handles stairs
+    ("pole",          ( 25,  65, 130), False),
+    ("traffic sign",  (230, 195,  60), False),
+    ("traffic light", (235,  85,  75), False),
+    # dynamic (top priority — override everything they occlude)
+    ("vehicle",       (110, 130, 220), False),
+    ("motorcycle",    (155,  60, 200), False),
+    ("bicycle",       (100, 230, 200), False),
+    ("person",        (205,  70, 145), False),
 ]
 BPE = "/home/joana/joana/sam3_assets/bpe_simple_vocab_16e6.txt.gz"
 
