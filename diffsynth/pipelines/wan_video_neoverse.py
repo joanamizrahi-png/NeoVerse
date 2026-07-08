@@ -421,6 +421,21 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         else:
             input_video = None
 
+        # SEMANTIC FINETUNE (Option A): during training, mirror the input_video timestamp
+        # sort onto the per-frame SAM3 labels so semantic_labels aligns with input_latents.
+        # This is the CLEAN target consumed by WanVideoUnit_InputVideoEmbedder (colorize +
+        # VAE-encode -> channel-concat with RGB latent). Labels arrive as np.ndarray from
+        # compose_batches_from_list; convert to tensor for the sort + downstream ops.
+        semantic_labels = None
+        if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and "labels" in source_views:
+            labels = source_views["labels"]
+            if isinstance(labels, np.ndarray):
+                labels = torch.from_numpy(labels)
+            semantic_labels = labels.clone()
+            for b_idx in range(len(semantic_labels)):
+                order_indices = torch.argsort(source_views["timestamp"][b_idx])
+                semantic_labels[b_idx] = semantic_labels[b_idx][order_indices]
+
         if target_rgb is not None and target_depth is not None and target_mask is not None and target_poses is not None and target_intrs is not None:
             return {
                 "input_video": input_video,
@@ -430,6 +445,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 "target_poses": target_poses,
                 "target_intrs": target_intrs,
                 "target_semantic": None,   # SEMANTIC FINETUNE: no re-rendering on caller-provided target
+                "semantic_labels": semantic_labels,
             }
 
         pipe.load_models_to_device(self.onload_model_names)
@@ -523,6 +539,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             "target_poses": target_poses,
             "target_intrs": target_intrs,
             "target_semantic": target_semantic,   # None on RGB-only runs
+            "semantic_labels": semantic_labels,   # None on RGB-only runs or when no dataloader labels
         }
 
     def compose_batches_from_list(self, batch):

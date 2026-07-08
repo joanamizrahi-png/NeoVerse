@@ -100,7 +100,9 @@ class SpatialVID(BaseDataset):
                 # NOTE: labels are NOT crop/resized here — they should already match the
                 # video resolution (that's how sam3_precompute_labels.py saves them, using
                 # load_video with the same width/height as this dataset).
-                view["labels"] = per_frame_labels[v]
+                # Cast int8 -> int32 so base_dataset.is_good_type accepts it (allowed dtypes
+                # are float32/bool/int32/int64/uint8). int32 is plenty for our 30 classes.
+                view["labels"] = per_frame_labels[v].astype(np.int32)
             if view["is_target"]:
                 target_views.append(view)
             else:
