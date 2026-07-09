@@ -1,88 +1,92 @@
-"""Edit #1 of semantic wiring: precompute SAM3 per-pixel labels for a clip,
-ALIGNED to the exact frames NeoVerse's reconstructor will use, and save to disk.
+"""Precompute per-pixel SAM 3 labels for a clip using HuggingFace transformers.
 
-Why a separate script: it loads SAM3 (3.3 GB) on its own, so SAM3 and the big
-NeoVerse model never sit in memory at the same time (avoids OOM on the Jetson).
-inference.py later just reads the cheap .npz this produces.
+Rewritten (2026-07-09) from the facebookresearch/sam3-based version, which hit
+5+ layered dtype mismatches when trying to use SAM 3.1's checkpoint on Marlowe's
+driver stack. The community-standard is HF's Sam3Model / Sam3Processor: dtype
+handled cleanly as a first-class arg, tested against many envs, and it supports
+the "efficient multi-prompt on one image" pattern by exposing get_vision_features.
 
-Alignment guarantee: we call the SAME load_video() that inference.py calls, with
-the same args, so frame i here == frame i there (same sampling, same resolution).
+For our 29-class taxonomy on 81 frames this cuts vision-encoder work ~29x
+(vision features computed once per frame, then reused across all class prompts).
 
-Usage (match whatever flags you'll pass to inference.py):
-  python sam3_precompute_labels.py --input_path examples/videos/driving.mp4
-Output:
-  outputs/sam3_labels/<clip-stem>.npz   (labels [N,H,W] int8 + class metadata)
+Alignment guarantee: same load_video() function as before -> the sampled frame
+indices are identical to inference.py, so the labels stay aligned 1:1 with the
+frames the NeoVerse reconstructor consumes.
+
+Usage:
+  python sam3_precompute_labels.py --input_path examples/videos/driving.mp4 --num_frames 81
+Output (schema unchanged so the diffusion dataloader keeps working):
+  outputs/sam3_labels/<clip-stem>.npz
+    labels        [N, H, W] int8   (0=void, 1..29 our taxonomy)
+    class_names   [30] str
+    class_colors  [30, 3] uint8
+    traversable   [30] bool
+    num_frames, height, width
   outputs/sam3_labels/<clip-stem>/sem_overlay_*.png   (a few, to eyeball)
 """
-import contextlib, os, sys, time, argparse, numpy as np
+import os, sys, time, argparse
+import numpy as np
 from PIL import Image
 import torch
 from decord import VideoReader
-import sam3.model_builder as _sam3_mb
-from sam3.model.necks import Sam3DualViTDetNeck
-from sam3 import build_sam3_image_model
-from sam3.model.sam3_image_processor import Sam3Processor
+from transformers import Sam3Model, Sam3Processor
 
-
-# ------------------------------------------------------------------
-# SAM 3.1 architecture patch (facebook/sam3.1 config.json shows 3 feature
-# levels; Meta's build_sam3_image_model hardcodes 4). Without this patch,
-# loading sam3.1_multiplex.pt gives missing_keys=['...convs.3.*'] and a
-# dtype mismatch at inference. Enabled when the checkpoint path looks
-# SAM 3.1-ish (contains "3.1" or "multiplex"), otherwise no-op so SAM 3
-# checkpoints keep working unchanged.
-# ------------------------------------------------------------------
-_ORIG_CREATE_VIT_NECK = _sam3_mb._create_vit_neck
-
-
-def _create_vit_neck_sam31(position_encoding, vit_backbone, enable_inst_interactivity=False):
-    """SAM 3.1 neck: 3 scales instead of 4 (drops the 0.5 downsample)."""
-    return Sam3DualViTDetNeck(
-        position_encoding=position_encoding,
-        d_model=256,
-        scale_factors=[4.0, 2.0, 1.0],
-        trunk=vit_backbone,
-        add_sam2_neck=enable_inst_interactivity,
-    )
-
-
-def _maybe_patch_for_sam31(checkpoint_path: str) -> bool:
-    """Monkey-patch model_builder for SAM 3.1 if the checkpoint looks like one."""
-    tag = os.path.basename(checkpoint_path).lower()
-    if "3.1" in tag or "3p1" in tag or "multiplex" in tag:
-        _sam3_mb._create_vit_neck = _create_vit_neck_sam31
-        return True
-    _sam3_mb._create_vit_neck = _ORIG_CREATE_VIT_NECK  # restore, in case
-    return False
-
-
-def _cast_bf16_preserve_complex(model: torch.nn.Module) -> None:
-    """Cast every float32 param/buffer to bfloat16 in-place.
-
-    Complex tensors (e.g. RoPE's `freqs_cis` from `torch.polar`) are left as-is,
-    because bfloat16 has no complex counterpart and a naive `.to(bfloat16)` would
-    silently discard the imaginary parts. The RoPE apply code casts activations
-    to float32 before `view_as_complex` and back to the input dtype after, so
-    complex64 buffers coexist with bf16 activations without issue.
-    """
-    for module in model.modules():
-        for name, param in list(module.named_parameters(recurse=False)):
-            if param is not None and param.dtype == torch.float32:
-                new_p = torch.nn.Parameter(
-                    param.data.to(torch.bfloat16),
-                    requires_grad=param.requires_grad,
-                )
-                setattr(module, name, new_p)
-        for name, buf in list(module.named_buffers(recurse=False)):
-            if buf is not None and buf.dtype == torch.float32:
-                module.register_buffer(name, buf.to(torch.bfloat16))
-            # complex64/complex128 buffers are intentionally left alone
+# --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
+# 29-class outdoor Go2W taxonomy (class ids 1..29; void=0 handled as "unlabeled").
+# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] and TRAVERSABLE
+# flags MUST match nav-rl/src/env/reward.py TRAVERSABLE. Ordering encodes SAM3 priority (later
+# wins) AND the class-id space -- all three files must be updated in lockstep.
+#
+# Priority layering (bottom -> top):
+#   sky -> ground materials -> ground hazards -> pavement materials -> pavement functions ->
+#   large statics -> vegetation -> small verticals + stairs -> dynamic objects.
+# Dynamics come last so a person/vehicle on a road stays labeled person/vehicle.
+CLASSES = [
+    # ambient
+    ("sky",           (200, 225, 245), False),
+    # ground materials (default ground layer)
+    ("dirt",          (139,  90,  43), True),   # FLAG: revisit -- may not be Go2W-traversable when loose
+    ("sand",          (230, 200, 155), True),   # FLAG: revisit -- loose sand may not be Go2W-traversable
+    ("grass",         ( 75, 190,  80), True),
+    ("gravel",        (180, 155, 100), True),
+    ("mulch",         (110,  55,  25), True),
+    # ground hazards
+    ("mud",           ( 55,  55,  30), False),
+    ("water",         ( 50, 120, 200), False),
+    ("rock",          (135, 145, 155), False),
+    # pavement materials
+    ("asphalt",       ( 55,  55,  65), True),
+    ("concrete",      (225, 220, 190), True),
+    # pavement functions (override materials for paved surfaces)
+    ("road",          (110, 110, 115), True),
+    ("sidewalk",      (180, 180, 180), True),
+    ("crosswalk",     (255, 250, 235), True),
+    # large vertical statics
+    ("building",      (170,  75,  60), False),
+    ("wall",          (175, 145, 175), False),
+    ("fence",         ( 90,  60, 130), False),
+    ("bridge",        ( 75, 155, 175), True),
+    # vegetation
+    ("tree",          ( 40, 105,  55), False),
+    ("vegetation",    (170, 200,  55), False),  # was 'bush' in RUGD; broadened to shrubs/undergrowth
+    ("log",           (135, 115,  90), False),
+    # small vertical + climbable
+    ("stairs",        (220, 140,  80), True),   # Go2W handles stairs
+    ("pole",          ( 25,  65, 130), False),
+    ("traffic sign",  (230, 195,  60), False),
+    ("traffic light", (235,  85,  75), False),
+    # dynamic (top priority -- override everything they occlude)
+    ("vehicle",       (110, 130, 220), False),
+    ("motorcycle",    (155,  60, 200), False),
+    ("bicycle",       (100, 230, 200), False),
+    ("person",        (205,  70, 145), False),
+]
 
 
 # ------------------------------------------------------------------
 # Inlined from diffsynth/utils/auxiliary.py so this script runs from
 # the lean `sam3` env (no diffsynth / modelscope needed for labeling).
-# MUST stay byte-identical to the diffsynth version — same frame sampling
+# MUST stay byte-identical to the diffsynth version -- same frame sampling
 # is the whole reason the SAM3 labels align 1:1 with inference.py's frames.
 # ------------------------------------------------------------------
 def center_crop(image, resolution):
@@ -124,61 +128,9 @@ def load_video(data, num_frames, resolution=(560, 336), resize_mode="center_crop
         return [_process(Image.fromarray(f)) for f in raw]
     raise ValueError(f"Invalid data input: {data}")
 
-# --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
-# 29-class outdoor Go2W taxonomy (class ids 1..29; void=0 handled as "unlabeled").
-# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] and TRAVERSABLE
-# flags MUST match nav-rl/src/env/reward.py TRAVERSABLE. Ordering encodes SAM3 priority (later
-# wins) AND the class-id space — all three files must be updated in lockstep.
-#
-# Priority layering (bottom → top):
-#   sky → ground materials → ground hazards → pavement materials → pavement functions →
-#   large statics → vegetation → small verticals + stairs → dynamic objects.
-# Dynamics come last so a person/vehicle on a road stays labeled person/vehicle.
-CLASSES = [
-    # ambient
-    ("sky",           (200, 225, 245), False),
-    # ground materials (default ground layer)
-    ("dirt",          (139,  90,  43), True),   # FLAG: revisit — may not be Go2W-traversable when loose
-    ("sand",          (230, 200, 155), True),   # FLAG: revisit — loose sand may not be Go2W-traversable
-    ("grass",         ( 75, 190,  80), True),
-    ("gravel",        (180, 155, 100), True),
-    ("mulch",         (110,  55,  25), True),
-    # ground hazards
-    ("mud",           ( 55,  55,  30), False),
-    ("water",         ( 50, 120, 200), False),
-    ("rock",          (135, 145, 155), False),
-    # pavement materials
-    ("asphalt",       ( 55,  55,  65), True),
-    ("concrete",      (225, 220, 190), True),
-    # pavement functions (override materials for paved surfaces)
-    ("road",          (110, 110, 115), True),
-    ("sidewalk",      (180, 180, 180), True),
-    ("crosswalk",     (255, 250, 235), True),
-    # large vertical statics
-    ("building",      (170,  75,  60), False),
-    ("wall",          (175, 145, 175), False),
-    ("fence",         ( 90,  60, 130), False),
-    ("bridge",        ( 75, 155, 175), True),
-    # vegetation
-    ("tree",          ( 40, 105,  55), False),
-    ("vegetation",    (170, 200,  55), False),  # was 'bush' in RUGD; broadened to shrubs/undergrowth
-    ("log",           (135, 115,  90), False),
-    # small vertical + climbable
-    ("stairs",        (220, 140,  80), True),   # Go2W handles stairs
-    ("pole",          ( 25,  65, 130), False),
-    ("traffic sign",  (230, 195,  60), False),
-    ("traffic light", (235,  85,  75), False),
-    # dynamic (top priority — override everything they occlude)
-    ("vehicle",       (110, 130, 220), False),
-    ("motorcycle",    (155,  60, 200), False),
-    ("bicycle",       (100, 230, 200), False),
-    ("person",        (205,  70, 145), False),
-]
-# --- SAM 3.1 checkpoint on Marlowe (change --checkpoint if you move it or want SAM 3). ---
-# BPE=None lets build_sam3_image_model auto-resolve the tokenizer via pkg_resources
-# (points at the copy inside the sam3 package). Pass --bpe explicitly to override.
-BPE = None
-CKPT_31 = "/scratch/m000204-pm06b/joana/sam3_ckpts/3.1/sam3.1_multiplex.pt"
+
+def _dtype_from_str(s: str) -> torch.dtype:
+    return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[s]
 
 
 def main():
@@ -189,14 +141,19 @@ def main():
     ap.add_argument("--height", type=int, default=336)
     ap.add_argument("--resize_mode", choices=["center_crop", "resize"], default="center_crop")
     ap.add_argument("--static_scene", action="store_true")
-    ap.add_argument("--conf", type=float, default=0.5)
-    ap.add_argument("--overlay_every", type=int, default=16, help="save an overlay every k frames")
+    ap.add_argument("--conf", type=float, default=0.5,
+                    help="score threshold for keeping an instance mask")
+    ap.add_argument("--mask_threshold", type=float, default=0.5,
+                    help="per-pixel sigmoid threshold on the mask logits")
+    ap.add_argument("--overlay_every", type=int, default=16,
+                    help="save an overlay every k frames")
     ap.add_argument("--prompts", default=None,
-                    help="comma-separated SAM3 prompts to override the default CLASSES (auto colors)")
-    ap.add_argument("--checkpoint", default=CKPT_31,
-                    help="path to SAM 3 or 3.1 checkpoint .pt (default: SAM 3.1 on Marlowe)")
-    ap.add_argument("--bpe", default=BPE,
-                    help="path to BPE tokenizer vocab (default: None -> auto-resolve via sam3 package)")
+                    help="comma-separated prompts to override the default CLASSES (auto colors)")
+    ap.add_argument("--model_id", default="facebook/sam3",
+                    help="HuggingFace model ID (facebook/sam3 is the community-tested default)")
+    ap.add_argument("--dtype", default="bfloat16",
+                    choices=["bfloat16", "float16", "float32"],
+                    help="model dtype -- bfloat16 is Meta's native, memory-efficient")
     args = ap.parse_args()
 
     global CLASSES
@@ -220,67 +177,50 @@ def main():
     out_dir = os.path.join("outputs/sam3_labels", stem)
     os.makedirs(out_dir, exist_ok=True)
 
-    is_sam31 = _maybe_patch_for_sam31(args.checkpoint)
-    print(f"building SAM{'3.1' if is_sam31 else '3'} from {args.checkpoint} ...", flush=True)
-    # NOTE: build_sam3_image_model defaults to SAM 3 (facebook/sam3, "sam3.pt") when
-    # load_from_HF=True and checkpoint_path=None. To use SAM 3.1, pass the checkpoint
-    # path explicitly AND set load_from_HF=False so the auto-download doesn't override.
-    model = build_sam3_image_model(
-        bpe_path=args.bpe,
-        device="cuda",
-        checkpoint_path=args.checkpoint,
-        load_from_HF=False,
-    )
-    # SAM 3.1: Meta's inference expects the whole model in bfloat16 (the fused
-    # addmm_act kernel and the CLIP text_projection both fail under autocast alone).
-    # A blind model.to(bfloat16) discards RoPE's imaginary parts (complex64 buffers).
-    # So: cast float32 params/buffers to bf16, LEAVE complex64 ones alone.
-    if is_sam31:
-        _cast_bf16_preserve_complex(model)
-    proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
-    # SAM 3.1: model is native bf16, but Sam3Processor's transform ends in float32
-    # (Normalize is a Meta default). The DETR decoder inside forward_grounding wraps
-    # its FFN in autocast(enabled=False), which means we CANNOT rely on outer
-    # autocast to save us — decoder layers alternate LayerNorm (autocast promotes to
-    # float32) with FFN (autocast off, needs bf16 input). Cleaner: cast the image
-    # tensor to bf16 at the tail of the preprocessing pipeline so everything downstream
-    # is bf16 end-to-end.
-    if is_sam31:
-        from torchvision.transforms import v2
-        proc.transform = v2.Compose([
-            v2.ToDtype(torch.uint8, scale=True),
-            v2.Resize(size=(proc.resolution, proc.resolution)),
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            v2.ToDtype(torch.bfloat16, scale=False),  # <-- tail cast for SAM 3.1
-        ])
+    dtype = _dtype_from_str(args.dtype)
+    print(f"loading {args.model_id} in {args.dtype} ...", flush=True)
+    # `dtype=` handles model creation + weight casting cleanly in one shot. No manual
+    # cast-with-complex-preserve, no autocast wrestling -- HF's integration takes care
+    # of all the intermediates that were tripping us on the raw sam3 package path.
+    model = Sam3Model.from_pretrained(args.model_id, dtype=dtype, device_map="auto")
+    processor = Sam3Processor.from_pretrained(args.model_id)
+    model.eval()
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
     colors = np.array([(0, 0, 0)] + [c for _, c, _ in CLASSES], dtype=np.uint8)
     t0 = time.time()
-    # SAM 3.1: no outer autocast — the model is native bf16 (Meta's design), and
-    # its decoder FFNs explicitly disable autocast, expecting bf16 in / bf16 out.
-    # The processor's transform now emits bf16 (see _cast_bf16_preserve_complex site).
-    # For SAM 3 we can keep autocast defensive since that path doesn't hit the
-    # enabled=False FFN combined with float32 LayerNorm output.
-    autocast_ctx = (
-        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-        if not is_sam31
-        else contextlib.nullcontext()
-    )
     for fi, img in enumerate(frames):
         img = img.convert("RGB")
         cmap = np.zeros((H, W), dtype=np.int8)
-        with autocast_ctx:
-            state = proc.set_image(img)
-            for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
-                # Reset prior prompt so state["masks"] reflects ONLY the current class.
-                # Matches the pattern in sam3/examples/sam3_image_predictor_example.ipynb.
-                proc.reset_all_prompts(state)
-                state = proc.set_text_prompt(state=state, prompt=name)
-                m = state["masks"]
-                if m.shape[0] > 0:
-                    cmap[m.any(dim=0).squeeze(0).cpu().numpy()] = ci   # priority overwrite
+
+        # === per-frame: encode vision ONCE, reuse across all class prompts ===
+        img_inputs = processor(images=img, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            vision_embeds = model.get_vision_features(pixel_values=img_inputs.pixel_values)
+        target_sizes = img_inputs.get("original_sizes").tolist()
+
+        # per-class inference: text encoder + DETR decoder + mask head only (cheap)
+        for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
+            text_inputs = processor(text=name, return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                outputs = model(vision_embeds=vision_embeds, **text_inputs)
+            results = processor.post_process_instance_segmentation(
+                outputs,
+                threshold=args.conf,
+                mask_threshold=args.mask_threshold,
+                target_sizes=target_sizes,
+            )[0]
+            m = results.get("masks")
+            if m is None or (hasattr(m, "__len__") and len(m) == 0):
+                continue
+            # `masks` may come back as a stacked tensor [k, H, W] or a list of [H, W].
+            if isinstance(m, list):
+                m = torch.stack([mm if isinstance(mm, torch.Tensor) else torch.as_tensor(mm) for mm in m])
+            # bool-any collapses the instance dimension: pixel is "this class" if ANY
+            # instance covers it. Then priority overwrite in the outer loop order.
+            class_mask = m.any(dim=0).cpu().numpy().astype(bool)
+            cmap[class_mask] = ci
+
         labels[fi] = cmap
         if fi % args.overlay_every == 0:
             base = np.array(img).astype(np.float32)
