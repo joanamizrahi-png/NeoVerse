@@ -202,17 +202,15 @@ def main():
     # NOTE: build_sam3_image_model defaults to SAM 3 (facebook/sam3, "sam3.pt") when
     # load_from_HF=True and checkpoint_path=None. To use SAM 3.1, pass the checkpoint
     # path explicitly AND set load_from_HF=False so the auto-download doesn't override.
+    # DO NOT cast the model to bfloat16 — the ViT backbone uses RoPE (complex numbers)
+    # which get silently discarded on bf16 conversion. Let sam3's own autocast handle
+    # activation dtype during forward.
     model = build_sam3_image_model(
         bpe_path=args.bpe,
         device="cuda",
         checkpoint_path=args.checkpoint,
         load_from_HF=False,
     )
-    # SAM 3.1 note: if we still see dtype mismatches after the neck patch above,
-    # the missing-key issue is gone but activations run under a bfloat16 autocast.
-    # Belt-and-suspenders: cast the whole model to bfloat16 so weights match.
-    if is_sam31:
-        model = model.to(torch.bfloat16)
     proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
