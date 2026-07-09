@@ -50,26 +50,22 @@ else
 fi
 
 # --- 3. metadata CSV (columns spatialvid.py reads: id, video path, annotation path, num frames, fps) ---
-# num frames must be >= min_clip_length (~= num_views * min_interval); use a large value.
-# fps must be an integer/float; use ffprobe if available, otherwise fall back to 30.
-if command -v ffprobe >/dev/null 2>&1; then
-    NFRAMES=$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$CLIP_SRC" 2>/dev/null || echo 240)
-    FPS_RAW=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$CLIP_SRC" 2>/dev/null || echo "30/1")
-    FPS=$(python3 -c "n,d=map(int,'$FPS_RAW'.split('/')); print(round(n/d))" 2>/dev/null || echo 30)
-else
-    NFRAMES=240
-    FPS=30
-fi
+# `num frames` is only used by SpatialVID._load_data to filter out too-short clips:
+#     min_clip_length = int(0.2 * fps) * (num_views - 1) * min_interval + 1
+# With num_views=81, fps=30, min_interval=1 that filter requires >= 481 frames.
+# Actual per-batch sampling uses decord's real video length (81 frames here) and works
+# fine, so this field can be a lie -- we just need it above the filter threshold.
+# Use 10000 to survive any reasonable num_views setting; ffprobe values would fail.
+NFRAMES=10000
+FPS=30
 
-if [ ! -f "$META_CSV" ]; then
-    cat > "$META_CSV" <<EOF
+# Always overwrite -- it's a tiny file and the previous incarnation may have had a
+# ffprobe-derived num_frames that gets us filtered out by the min_clip_length gate.
+cat > "$META_CSV" <<EOF
 id,video path,annotation path,num frames,fps
 $CLIP_ID,$CLIP_ID/$CLIP_ID.mp4,$CLIP_ID,$NFRAMES,$FPS
 EOF
-    echo "    wrote $META_CSV  (num_frames=$NFRAMES, fps=$FPS)"
-else
-    echo "    metadata csv already in place: $META_CSV"
-fi
+echo "    wrote $META_CSV  (num_frames=$NFRAMES, fps=$FPS)"
 
 # --- 4. Full-video SAM3 labeling (--static_scene) -- REQUIRED for training alignment ---
 mkdir -p "$LABELS_DIR"
