@@ -216,18 +216,25 @@ def main():
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
     colors = np.array([(0, 0, 0)] + [c for _, c, _ in CLASSES], dtype=np.uint8)
     t0 = time.time()
+    # sam3's ViT MLPs use a fused addmm_act kernel that always emits bfloat16, but
+    # the surrounding LayerNorm / fc2 keep float32 weights -> dtype mismatch on plain
+    # forward. Wrap inference in autocast(bfloat16) so Linear/Conv weights are cast
+    # transparently, while RoPE's complex64 buffers stay complex (they only appear
+    # inside operators autocast leaves alone).
+    autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     for fi, img in enumerate(frames):
         img = img.convert("RGB")
         cmap = np.zeros((H, W), dtype=np.int8)
-        state = proc.set_image(img)
-        for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
-            # Reset prior prompt so state["masks"] reflects ONLY the current class.
-            # Matches the pattern in sam3/examples/sam3_image_predictor_example.ipynb.
-            proc.reset_all_prompts(state)
-            state = proc.set_text_prompt(state=state, prompt=name)
-            m = state["masks"]
-            if m.shape[0] > 0:
-                cmap[m.any(dim=0).squeeze(0).cpu().numpy()] = ci   # priority overwrite
+        with autocast_ctx:
+            state = proc.set_image(img)
+            for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
+                # Reset prior prompt so state["masks"] reflects ONLY the current class.
+                # Matches the pattern in sam3/examples/sam3_image_predictor_example.ipynb.
+                proc.reset_all_prompts(state)
+                state = proc.set_text_prompt(state=state, prompt=name)
+                m = state["masks"]
+                if m.shape[0] > 0:
+                    cmap[m.any(dim=0).squeeze(0).cpu().numpy()] = ci   # priority overwrite
         labels[fi] = cmap
         if fi % args.overlay_every == 0:
             base = np.array(img).astype(np.float32)
