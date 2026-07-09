@@ -30,6 +30,11 @@ mkdir -p /scratch/m000204-pm06b/joana/runs/smoke_semantic
 module load conda/24.3.0-0
 module load cuda12.9/toolkit/12.9.1
 export PATH=/users/jmizrahi/.conda/envs/neoverse/bin:$PATH
+# IMPORTANT: ignore ~/.local/lib/python3.10/site-packages -- yesterday's failed
+# sam3 install polluted it with torch 2.10.0+cu128 and huggingface-hub 1.22.0
+# which shadow neoverse's env packages and break the pipeline (CUBLAS bugs +
+# transformers dependency version conflict).
+export PYTHONNOUSERSITE=1
 hash -r
 
 # Quieter HF (don't need the download progress noise clogging the log)
