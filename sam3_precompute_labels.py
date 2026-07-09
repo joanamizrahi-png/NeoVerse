@@ -18,8 +18,42 @@ import os, sys, time, argparse, numpy as np
 from PIL import Image
 import torch
 from decord import VideoReader
+import sam3.model_builder as _sam3_mb
+from sam3.model.necks import Sam3DualViTDetNeck
 from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
+
+
+# ------------------------------------------------------------------
+# SAM 3.1 architecture patch (facebook/sam3.1 config.json shows 3 feature
+# levels; Meta's build_sam3_image_model hardcodes 4). Without this patch,
+# loading sam3.1_multiplex.pt gives missing_keys=['...convs.3.*'] and a
+# dtype mismatch at inference. Enabled when the checkpoint path looks
+# SAM 3.1-ish (contains "3.1" or "multiplex"), otherwise no-op so SAM 3
+# checkpoints keep working unchanged.
+# ------------------------------------------------------------------
+_ORIG_CREATE_VIT_NECK = _sam3_mb._create_vit_neck
+
+
+def _create_vit_neck_sam31(position_encoding, vit_backbone, enable_inst_interactivity=False):
+    """SAM 3.1 neck: 3 scales instead of 4 (drops the 0.5 downsample)."""
+    return Sam3DualViTDetNeck(
+        position_encoding=position_encoding,
+        d_model=256,
+        scale_factors=[4.0, 2.0, 1.0],
+        trunk=vit_backbone,
+        add_sam2_neck=enable_inst_interactivity,
+    )
+
+
+def _maybe_patch_for_sam31(checkpoint_path: str) -> bool:
+    """Monkey-patch model_builder for SAM 3.1 if the checkpoint looks like one."""
+    tag = os.path.basename(checkpoint_path).lower()
+    if "3.1" in tag or "3p1" in tag or "multiplex" in tag:
+        _sam3_mb._create_vit_neck = _create_vit_neck_sam31
+        return True
+    _sam3_mb._create_vit_neck = _ORIG_CREATE_VIT_NECK  # restore, in case
+    return False
 
 
 # ------------------------------------------------------------------
@@ -163,7 +197,8 @@ def main():
     out_dir = os.path.join("outputs/sam3_labels", stem)
     os.makedirs(out_dir, exist_ok=True)
 
-    print(f"building SAM3 from {args.checkpoint} ...", flush=True)
+    is_sam31 = _maybe_patch_for_sam31(args.checkpoint)
+    print(f"building SAM{'3.1' if is_sam31 else '3'} from {args.checkpoint} ...", flush=True)
     # NOTE: build_sam3_image_model defaults to SAM 3 (facebook/sam3, "sam3.pt") when
     # load_from_HF=True and checkpoint_path=None. To use SAM 3.1, pass the checkpoint
     # path explicitly AND set load_from_HF=False so the auto-download doesn't override.
@@ -173,6 +208,11 @@ def main():
         checkpoint_path=args.checkpoint,
         load_from_HF=False,
     )
+    # SAM 3.1 note: if we still see dtype mismatches after the neck patch above,
+    # the missing-key issue is gone but activations run under a bfloat16 autocast.
+    # Belt-and-suspenders: cast the whole model to bfloat16 so weights match.
+    if is_sam31:
+        model = model.to(torch.bfloat16)
     proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
