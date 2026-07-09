@@ -1,0 +1,74 @@
+# Semantic finetune SMOKE TEST config.
+# Goal: run ~50 steps on ONE clip, verify the semantic training path plumbs through
+# (32-ch input_latents, holey-semantic hint, clean-semantic target, joint denoise loss)
+# without erroring / NaN'ing. NOT a real training run -- results are throwaway.
+#
+# Setup expected before running (see scripts/setup_smoke_data.sh):
+#   /scratch/m000204-pm06b/joana/smoke_data/
+#     data/train/SpatialVID_HQ_metadata.csv     (1 row: id=driving, ...)
+#     SpatialVid/HQ/driving/driving.mp4
+#     SpatialVid/HQ/driving/caption.json
+#   /scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/driving.npz
+#     -- labels for ALL frames of driving.mp4 (rerun SAM3 with --static_scene)
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+# SEMANTIC FINETUNE: 16 extra latent channels alongside RGB.
+# Setting > 0 triggers expand_dit_for_semantics + expand_control_branch_for_semantics
+# in train.py; unchanged from RGB-only when this is 0.
+semantic_channels: 16
+
+# 1-clip smoke dataset. `labels_dir` is the semantic finetune hook -- points at the
+# per-clip .npz files produced by sam3_precompute_labels.py.
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/smoke_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# ONLY train the control_branch + a small LoRA on the DiT.
+# RGB weights stay frozen; semantic channels start zero-init and learn from scratch.
+trainable_models: control_branch.*
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 32
+
+learning_rate: 1e-5
+num_epochs: 1                    # 1 clip x 1 epoch = smallest sane run
+batch_size: 1
+num_workers: 1
+pin_memory: false
+output_path: /scratch/m000204-pm06b/joana/runs/smoke_semantic
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: false
+gradient_accumulation_steps: 1
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+# Chatty for debugging; smoke test only.
+print_freq: 1
+save_freq: 0.5                   # save halfway through and at end
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+pretrained_path: null
