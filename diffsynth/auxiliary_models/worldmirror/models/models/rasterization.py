@@ -733,7 +733,16 @@ class GaussianSplatRenderer(nn.Module):
         # Rendering one-hot vectors and taking argmax gives a view-consistent semantic image.
         if "labels" in views:
             lbl = views["labels"][:, :S].reshape(B, S, H * W).long()                  # [B, S, H*W]
-            num_classes = int(views["labels"].max().item()) + 1
+            # Pad the one-hot to a gsplat-supported channel count. gsplat's default CUDA build
+            # supports {1,2,3,4,5,6,8,9,16,17,21,23,24,32,33,64,...} -- 30 is NOT in that list,
+            # so our 30-class taxonomy would error. Rounding UP to 32 pads with 2 zero-channels
+            # that can never win argmax (padding always renders 0 while real classes accumulate
+            # positive alpha-blended values). Alternative: rebuild gsplat with GSPLAT_NUM_CHANNELS
+            # including 30 -- padding is faster and less brittle across gsplat updates.
+            GSPLAT_SUPPORTED_CHANNELS = (1, 2, 3, 4, 5, 6, 8, 9, 16, 17, 21, 23, 24, 32, 33, 64, 65, 128, 129, 256, 257, 512, 513)
+            actual_num_classes = int(views["labels"].max().item()) + 1
+            num_classes = next((c for c in GSPLAT_SUPPORTED_CHANNELS if c >= actual_num_classes),
+                               GSPLAT_SUPPORTED_CHANNELS[-1])
             splats["labels"] = F.one_hot(lbl, num_classes).to(splats["means"].dtype)  # [B, S, H*W, C]
 
         splats["timestamp"] = views["timestamp"][:, :S]
