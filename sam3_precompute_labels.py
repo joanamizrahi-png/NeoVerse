@@ -14,7 +14,7 @@ Output:
   outputs/sam3_labels/<clip-stem>.npz   (labels [N,H,W] int8 + class metadata)
   outputs/sam3_labels/<clip-stem>/sem_overlay_*.png   (a few, to eyeball)
 """
-import os, sys, time, argparse, numpy as np
+import contextlib, os, sys, time, argparse, numpy as np
 from PIL import Image
 import torch
 from decord import VideoReader
@@ -238,16 +238,36 @@ def main():
     if is_sam31:
         _cast_bf16_preserve_complex(model)
     proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
+    # SAM 3.1: model is native bf16, but Sam3Processor's transform ends in float32
+    # (Normalize is a Meta default). The DETR decoder inside forward_grounding wraps
+    # its FFN in autocast(enabled=False), which means we CANNOT rely on outer
+    # autocast to save us — decoder layers alternate LayerNorm (autocast promotes to
+    # float32) with FFN (autocast off, needs bf16 input). Cleaner: cast the image
+    # tensor to bf16 at the tail of the preprocessing pipeline so everything downstream
+    # is bf16 end-to-end.
+    if is_sam31:
+        from torchvision.transforms import v2
+        proc.transform = v2.Compose([
+            v2.ToDtype(torch.uint8, scale=True),
+            v2.Resize(size=(proc.resolution, proc.resolution)),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            v2.ToDtype(torch.bfloat16, scale=False),  # <-- tail cast for SAM 3.1
+        ])
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
     colors = np.array([(0, 0, 0)] + [c for _, c, _ in CLASSES], dtype=np.uint8)
     t0 = time.time()
-    # sam3's ViT MLPs use a fused addmm_act kernel that always emits bfloat16, but
-    # the surrounding LayerNorm / fc2 keep float32 weights -> dtype mismatch on plain
-    # forward. Wrap inference in autocast(bfloat16) so Linear/Conv weights are cast
-    # transparently, while RoPE's complex64 buffers stay complex (they only appear
-    # inside operators autocast leaves alone).
-    autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    # SAM 3.1: no outer autocast — the model is native bf16 (Meta's design), and
+    # its decoder FFNs explicitly disable autocast, expecting bf16 in / bf16 out.
+    # The processor's transform now emits bf16 (see _cast_bf16_preserve_complex site).
+    # For SAM 3 we can keep autocast defensive since that path doesn't hit the
+    # enabled=False FFN combined with float32 LayerNorm output.
+    autocast_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if not is_sam31
+        else contextlib.nullcontext()
+    )
     for fi, img in enumerate(frames):
         img = img.convert("RGB")
         cmap = np.zeros((H, W), dtype=np.int8)
