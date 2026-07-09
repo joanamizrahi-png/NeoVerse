@@ -72,3 +72,18 @@ resume: null
 start_epoch: 0
 resume_step: null
 pretrained_path: null
+
+# ---- W&B ----
+# `wandb_project: null` disables W&B. Set to a string to enable live logging;
+# training/utils.py picks this up in launch_training_task. `wandb_mode: offline`
+# writes logs to disk only (safe if compute node can't reach api.wandb.ai).
+wandb_project: neoverse-semantic
+wandb_run_name: smoke_semantic
+wandb_mode: online
+
+# ---- Debug: dump per-iteration intermediates ----
+# Sets pipe.save_root so 4DPreprocesser writes gt.mp4 + gt_semantic_hint.mp4 +
+# gt_semantic_target.mp4 to <root>/<dataset>/<video_name>/ every iteration.
+# Only useful for smoke tests / eyeballing the first few iterations. For real
+# training, set to null to keep the pipeline lean.
+debug_save_root: /scratch/m000204-pm06b/joana/runs/smoke_semantic/debug

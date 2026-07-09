@@ -527,9 +527,26 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 output_path += source_views["dataset"][0][0] + "/"
             if "video_name" in source_views:
                 output_path += source_views["video_name"][0][0] + "/"
-            output_path += "gt.mp4"
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            save_video(video, output_path, fps=15)
+            os.makedirs(output_path, exist_ok=True)
+            save_video(video, output_path + "gt.mp4", fps=15)
+            # SEMANTIC FINETUNE debug dump: side-by-side eyeball for the exact tensors
+            # the DiT will see on this step. `gt_semantic_hint.mp4` is the HOLEY hint
+            # (Gaussian-projected -> may have unseen-region gaps that the diffusion is
+            # supposed to inpaint). `gt_semantic_target.mp4` is the CLEAN target (SAM3
+            # per-frame, no gaps). Both use the palette from diffsynth.utils.semantics.
+            # Gated by target_semantic / semantic_labels being populated, so this is
+            # inert on RGB-only training runs.
+            if target_semantic is not None or semantic_labels is not None:
+                from ..utils.semantics import labels_to_rgb
+                def _save_semantic_video(labels_tensor, out_name):
+                    if labels_tensor is None:
+                        return
+                    rgb = labels_to_rgb(labels_tensor.to("cpu"))            # [B,T,H,W,3] in [0,1]
+                    frames = rearrange(rgb, "B T H W C -> (B T) H W C")
+                    frames = (frames * 255).clip(0, 255).to(torch.uint8).numpy()
+                    save_video([Image.fromarray(f) for f in frames], output_path + out_name, fps=15)
+                _save_semantic_video(target_semantic, "gt_semantic_hint.mp4")
+                _save_semantic_video(semantic_labels, "gt_semantic_target.mp4")
         return {
             "source_views": source_views,
             "input_video": input_video,

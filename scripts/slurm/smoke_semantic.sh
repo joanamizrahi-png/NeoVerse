@@ -44,6 +44,11 @@ echo "which python: $(which python)"
 python -c "import torch; print(f'torch: {torch.__version__}, cuda: {torch.cuda.is_available()}, device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')"
 nvidia-smi | head -20
 
+# Install wandb into neoverse env only if it's missing (idempotent, cheap when present).
+# training/utils.py catches ImportError anyway, but installing here means live loss curves
+# on wandb.ai instead of a silent skip.
+python -c "import wandb" 2>/dev/null || python -m pip install --quiet wandb
+
 # --- sanity: labels shape aligns with the video ---
 python - <<'PY'
 import os, numpy as np

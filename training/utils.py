@@ -459,6 +459,27 @@ def launch_training_task(
         SummaryWriter(log_dir=args.output_path) if accelerator.is_main_process else None
     )
 
+    # ---- W&B init (main process only, gated by wandb_project in config) ----
+    # Set `wandb_project: null` (or leave unset) in the yaml to disable logging.
+    # Set `wandb_mode: offline` to write W&B logs locally without an internet
+    # connection (useful on compute nodes that can't reach api.wandb.ai).
+    wandb_run = None
+    if accelerator.is_main_process and getattr(args, "wandb_project", None):
+        try:
+            import wandb
+            wandb_run = wandb.init(
+                project=args.wandb_project,
+                name=getattr(args, "wandb_run_name", None),
+                config=OmegaConf.to_container(args, resolve=True),
+                dir=args.output_path,
+                mode=getattr(args, "wandb_mode", "online"),
+                reinit=True,
+            )
+            printer.info(f"W&B run: {wandb_run.url if wandb_run.url else wandb_run.name}")
+        except Exception as e:
+            printer.warning(f"W&B init failed ({e}); continuing without W&B.")
+            wandb_run = None
+
     printer.info("Start training")
     for epoch_id in range(start_epoch, args.num_epochs):
         metric_logger = MetricLogger(args.output_path, remove_prefix_in_ckpt=args.remove_prefix_in_ckpt, delimiter="  ")
@@ -509,6 +530,17 @@ def launch_training_task(
                     log_writer.add_scalar("train_loss", loss_value_reduce, step)
                     log_writer.add_scalar("train_lr", lr, step)
                     log_writer.add_scalar("train_iter", epoch_1000x, step)
+                    # Mirror to W&B when it's live. Gets us live loss curves on
+                    # wandb.ai in addition to the local tensorboard writer.
+                    if wandb_run is not None:
+                        wandb_run.log(
+                            {
+                                "train/loss": float(loss_value_reduce),
+                                "train/lr": lr,
+                                "train/epoch": epoch_f,
+                            },
+                            step=step,
+                        )
             if (
                 data_iter_step % int(args.save_freq * len(dataloader)) == 0
                 and iter_step != 0
@@ -517,3 +549,6 @@ def launch_training_task(
                 print("saving at step", data_iter_step)
                 metric_logger.save(accelerator, model, epoch_id, data_iter_step)
         metric_logger.save(accelerator, model, epoch_id + 1)
+
+    if wandb_run is not None:
+        wandb_run.finish()

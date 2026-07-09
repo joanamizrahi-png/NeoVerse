@@ -143,6 +143,15 @@ if __name__ == "__main__":
         min_timestep_boundary=args.min_timestep_boundary,
         semantic_channels=int(getattr(args, "semantic_channels", 0)),
     )
+    # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
+    # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for
+    # every training iteration under <root>/<dataset>/<video_name>/. Set null in the
+    # yaml to disable. Cheap side-effect on top of an existing pipe knob.
+    debug_save_root = getattr(args, "debug_save_root", None)
+    if debug_save_root:
+        model.pipe.save_root = debug_save_root
+        os.makedirs(debug_save_root, exist_ok=True)
+        print(f"[debug] pipe.save_root = {debug_save_root}")
     optimizer = torch.optim.AdamW(model.trainable_modules(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
     launch_training_task(
