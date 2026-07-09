@@ -56,6 +56,29 @@ def _maybe_patch_for_sam31(checkpoint_path: str) -> bool:
     return False
 
 
+def _cast_bf16_preserve_complex(model: torch.nn.Module) -> None:
+    """Cast every float32 param/buffer to bfloat16 in-place.
+
+    Complex tensors (e.g. RoPE's `freqs_cis` from `torch.polar`) are left as-is,
+    because bfloat16 has no complex counterpart and a naive `.to(bfloat16)` would
+    silently discard the imaginary parts. The RoPE apply code casts activations
+    to float32 before `view_as_complex` and back to the input dtype after, so
+    complex64 buffers coexist with bf16 activations without issue.
+    """
+    for module in model.modules():
+        for name, param in list(module.named_parameters(recurse=False)):
+            if param is not None and param.dtype == torch.float32:
+                new_p = torch.nn.Parameter(
+                    param.data.to(torch.bfloat16),
+                    requires_grad=param.requires_grad,
+                )
+                setattr(module, name, new_p)
+        for name, buf in list(module.named_buffers(recurse=False)):
+            if buf is not None and buf.dtype == torch.float32:
+                module.register_buffer(name, buf.to(torch.bfloat16))
+            # complex64/complex128 buffers are intentionally left alone
+
+
 # ------------------------------------------------------------------
 # Inlined from diffsynth/utils/auxiliary.py so this script runs from
 # the lean `sam3` env (no diffsynth / modelscope needed for labeling).
@@ -202,15 +225,18 @@ def main():
     # NOTE: build_sam3_image_model defaults to SAM 3 (facebook/sam3, "sam3.pt") when
     # load_from_HF=True and checkpoint_path=None. To use SAM 3.1, pass the checkpoint
     # path explicitly AND set load_from_HF=False so the auto-download doesn't override.
-    # DO NOT cast the model to bfloat16 — the ViT backbone uses RoPE (complex numbers)
-    # which get silently discarded on bf16 conversion. Let sam3's own autocast handle
-    # activation dtype during forward.
     model = build_sam3_image_model(
         bpe_path=args.bpe,
         device="cuda",
         checkpoint_path=args.checkpoint,
         load_from_HF=False,
     )
+    # SAM 3.1: Meta's inference expects the whole model in bfloat16 (the fused
+    # addmm_act kernel and the CLIP text_projection both fail under autocast alone).
+    # A blind model.to(bfloat16) discards RoPE's imaginary parts (complex64 buffers).
+    # So: cast float32 params/buffers to bf16, LEAVE complex64 ones alone.
+    if is_sam31:
+        _cast_bf16_preserve_complex(model)
     proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
