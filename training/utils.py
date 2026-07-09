@@ -541,8 +541,13 @@ def launch_training_task(
                             },
                             step=step,
                         )
+            # Guard the modulo: on a 1-clip smoke dataset, int(save_freq * len(dataloader))
+            # rounds to 0 and % 0 crashes. Cap at 1 so the intermediate save silently no-ops
+            # for tiny datasets (the outer iter_step != 0 check already skips the first step;
+            # the end-of-epoch save below still fires).
+            save_every = max(1, int(args.save_freq * len(dataloader)))
             if (
-                data_iter_step % int(args.save_freq * len(dataloader)) == 0
+                data_iter_step % save_every == 0
                 and iter_step != 0
                 and iter_step != len(active_dataloader) - 1
             ):
