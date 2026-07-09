@@ -71,7 +71,11 @@ CLASSES = [
     ("bicycle",       (100, 230, 200), False),
     ("person",        (205,  70, 145), False),
 ]
-BPE = "/home/joana/joana/sam3_assets/bpe_simple_vocab_16e6.txt.gz"
+# --- SAM 3.1 checkpoint on Marlowe (change --checkpoint if you move it or want SAM 3). ---
+# BPE=None lets build_sam3_image_model auto-resolve the tokenizer via pkg_resources
+# (points at the copy inside the sam3 package). Pass --bpe explicitly to override.
+BPE = None
+CKPT_31 = "/scratch/m000204-pm06b/joana/sam3_ckpts/3.1/sam3.1_multiplex.pt"
 
 
 def main():
@@ -86,6 +90,10 @@ def main():
     ap.add_argument("--overlay_every", type=int, default=16, help="save an overlay every k frames")
     ap.add_argument("--prompts", default=None,
                     help="comma-separated SAM3 prompts to override the default CLASSES (auto colors)")
+    ap.add_argument("--checkpoint", default=CKPT_31,
+                    help="path to SAM 3 or 3.1 checkpoint .pt (default: SAM 3.1 on Marlowe)")
+    ap.add_argument("--bpe", default=BPE,
+                    help="path to BPE tokenizer vocab (default: None -> auto-resolve via sam3 package)")
     args = ap.parse_args()
 
     global CLASSES
@@ -109,8 +117,16 @@ def main():
     out_dir = os.path.join("outputs/sam3_labels", stem)
     os.makedirs(out_dir, exist_ok=True)
 
-    print("building SAM3...", flush=True)
-    model = build_sam3_image_model(bpe_path=BPE, device="cuda", load_from_HF=True)
+    print(f"building SAM3 from {args.checkpoint} ...", flush=True)
+    # NOTE: build_sam3_image_model defaults to SAM 3 (facebook/sam3, "sam3.pt") when
+    # load_from_HF=True and checkpoint_path=None. To use SAM 3.1, pass the checkpoint
+    # path explicitly AND set load_from_HF=False so the auto-download doesn't override.
+    model = build_sam3_image_model(
+        bpe_path=args.bpe,
+        device="cuda",
+        checkpoint_path=args.checkpoint,
+        load_from_HF=False,
+    )
     proc = Sam3Processor(model, device="cuda", confidence_threshold=args.conf)
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
@@ -121,7 +137,10 @@ def main():
         cmap = np.zeros((H, W), dtype=np.int8)
         state = proc.set_image(img)
         for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
-            state = proc.set_text_prompt(name, state)
+            # Reset prior prompt so state["masks"] reflects ONLY the current class.
+            # Matches the pattern in sam3/examples/sam3_image_predictor_example.ipynb.
+            proc.reset_all_prompts(state)
+            state = proc.set_text_prompt(state=state, prompt=name)
             m = state["masks"]
             if m.shape[0] > 0:
                 cmap[m.any(dim=0).squeeze(0).cpu().numpy()] = ci   # priority overwrite
