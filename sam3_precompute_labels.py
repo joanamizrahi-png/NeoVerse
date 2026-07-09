@@ -17,9 +17,55 @@ Output:
 import os, sys, time, argparse, numpy as np
 from PIL import Image
 import torch
-from diffsynth.utils.auxiliary import load_video
+from decord import VideoReader
 from sam3 import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
+
+
+# ------------------------------------------------------------------
+# Inlined from diffsynth/utils/auxiliary.py so this script runs from
+# the lean `sam3` env (no diffsynth / modelscope needed for labeling).
+# MUST stay byte-identical to the diffsynth version — same frame sampling
+# is the whole reason the SAM3 labels align 1:1 with inference.py's frames.
+# ------------------------------------------------------------------
+def center_crop(image, resolution):
+    """Center crop a PIL Image to target resolution, scaling first to cover."""
+    width, height = image.size
+    target_width, target_height = resolution
+    scale_final = max(target_width / width, target_height / height)
+    output_width = int(width * scale_final)
+    output_height = int(height * scale_final)
+    scaled_image = image.resize((output_width, output_height), resample=Image.LANCZOS)
+    left = (output_width - target_width) // 2
+    top = (output_height - target_height) // 2
+    return scaled_image.crop((left, top, left + target_width, top + target_height))
+
+
+def load_video(data, num_frames, resolution=(560, 336), resize_mode="center_crop", static_scene=False):
+    """Load N frames from a video (or image dir / list). Mirror of diffsynth's version."""
+    def _process(image):
+        if resize_mode == "resize":
+            return image.resize(resolution, resample=Image.LANCZOS)
+        return center_crop(image, resolution)
+
+    assert isinstance(data, (str, list)), f"data must be str or list, got {type(data)}"
+    if isinstance(data, str) and data.endswith((".jpg", ".jpeg", ".png")):
+        data = [data]
+
+    if isinstance(data, list):
+        paths = sorted(data, key=lambda x: os.path.basename(x))
+        idxs = np.arange(len(paths)) if static_scene else np.linspace(0, len(paths) - 1, num_frames, dtype=int)
+        return [_process(Image.open(paths[i])) for i in idxs]
+    if os.path.isdir(data):
+        names = sorted(os.listdir(data))
+        idxs = np.arange(len(names)) if static_scene else np.linspace(0, len(names) - 1, num_frames, dtype=int)
+        return [_process(Image.open(os.path.join(data, names[i]))) for i in idxs]
+    if os.path.isfile(data):
+        vr = VideoReader(data)
+        idxs = np.arange(len(vr)) if static_scene else np.linspace(0, len(vr) - 1, num_frames, dtype=int)
+        raw = vr.get_batch(idxs).asnumpy()
+        return [_process(Image.fromarray(f)) for f in raw]
+    raise ValueError(f"Invalid data input: {data}")
 
 # --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
 # 29-class outdoor Go2W taxonomy (class ids 1..29; void=0 handled as "unlabeled").
