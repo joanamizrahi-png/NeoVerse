@@ -37,14 +37,35 @@ echo "which python: $(which python)"
 python -c "import torch; print(f'torch: {torch.__version__}, cuda: {torch.cuda.is_available()}')"
 nvidia-smi | head -20
 
+# Single source of truth for which yaml is being trained on. The sanity block
+# below and `python train.py` below both use this path -- keeps them in lockstep,
+# so changing datasets is a one-line edit here instead of a two-place bug.
+CONFIG_PATH="training/configs/train_semantic.yaml"
+
 # --- sanity: dataset has clips + labels ---
-python - <<'PY'
-import os, numpy as np
+# Parses ROOT and labels_dir straight out of the yaml's `train_dataset` line so
+# it never disagrees with the actual training. If the parse fails (missing keys,
+# odd formatting), the block errors out and the job doesn't waste a GPU slot.
+CONFIG_PATH="$CONFIG_PATH" python - <<'PY'
+import os, re, sys, numpy as np
 import pandas as pd
 from decord import VideoReader
+import yaml
 
-ROOT = "/scratch/m000204-pm06b/joana/rugd_train_data"
-LABELS_DIR = "/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels"
+config_path = os.environ["CONFIG_PATH"]
+with open(config_path) as f:
+    cfg = yaml.safe_load(f)
+
+dataset_line = cfg.get("train_dataset", "")
+m_root = re.search(r'ROOT="([^"]+)"', dataset_line)
+m_labels = re.search(r'labels_dir="([^"]+)"', dataset_line)
+if not m_root or not m_labels:
+    sys.exit(f"[sanity] could not parse ROOT / labels_dir out of train_dataset:\n  {dataset_line}")
+ROOT = m_root.group(1)
+LABELS_DIR = m_labels.group(1)
+print(f"[sanity] config: {config_path}")
+print(f"[sanity] ROOT       = {ROOT}")
+print(f"[sanity] LABELS_DIR = {LABELS_DIR}")
 
 meta = pd.read_csv(os.path.join(ROOT, "data/train/SpatialVID_HQ_metadata.csv"))
 print(f"[sanity] {len(meta)} clips in metadata csv")
@@ -70,13 +91,13 @@ for _, row in meta.iterrows():
         continue
     ok += 1
 print(f"[sanity] {ok} clips have matching video + label; {missing} missing/misaligned")
-assert ok > 0, "no valid clips -- did the labeling job finish? did setup_rugd_train_data.sh run?"
+assert ok > 0, "no valid clips -- did the labeling job finish? did the setup script run?"
 PY
 
 # Install wandb if missing (idempotent)
 python -c "import wandb" 2>/dev/null || python -m pip install --quiet wandb
 
 # --- launch training ---
-python train.py training/configs/train_semantic.yaml
+python train.py "$CONFIG_PATH"
 
 echo "==> training done; latest checkpoint in /scratch/m000204-pm06b/joana/runs/train_semantic_v1/"
