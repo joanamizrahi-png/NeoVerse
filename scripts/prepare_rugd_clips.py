@@ -85,8 +85,10 @@ def chunk_to_mp4(frames, out_path: Path, fps: int):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rugd_root", required=True, help="Path to RUGD root (with scenes or flat frames)")
+    ap.add_argument("--rugd_root", required=True, help="Path to root (with scenes or flat frames)")
     ap.add_argument("--out_dir", default="examples/videos/training_pilot")
+    ap.add_argument("--prefix", default="rugd",
+                    help="Filename prefix for output MP4s (e.g. 'cityscapes'). Default: 'rugd'.")
     ap.add_argument("--frames_per_clip", type=int, default=81)
     ap.add_argument("--stride", type=int, default=250,
                     help="Frames between consecutive clip starts within a scene")
@@ -123,7 +125,7 @@ def main():
         start = 0
         while start + args.frames_per_clip <= n and clip_idx < args.max_per_scene:
             chunk = frames[start:start + args.frames_per_clip]
-            out_path = out_dir / f"rugd_{scene}_{clip_idx:02d}.mp4"
+            out_path = out_dir / f"{args.prefix}_{scene}_{clip_idx:02d}.mp4"
             if out_path.exists():
                 print(f"SKIP {out_path.name} (exists)")
             else:
