@@ -1,0 +1,80 @@
+# REAL semantic finetune training config.
+# Goal: learn to co-generate RGB + semantics on ~30 off-road clips (RUGD trails,
+# creek, parks, village). Assumes the smoke test already validated plumbing.
+#
+# Setup expected before running (see scripts/setup_rugd_train_data.sh):
+#   /scratch/m000204-pm06b/joana/rugd_train_data/
+#     data/train/SpatialVID_HQ_metadata.csv       (~30 rows, one per clip)
+#     SpatialVid/HQ/<clip>/<clip>.mp4              (symlinks)
+#     SpatialVid/HQ/<clip>/caption.json            (scene descriptions)
+#   /scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/<clip>.npz  (per-frame SAM3 labels)
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+# SEMANTIC FINETUNE: 16 extra latent channels alongside RGB (32-ch input_latents).
+semantic_channels: 16
+
+# ~30 clips. `labels_dir` matches the batch-labeling script's output.
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/rugd_train_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# Only the control_branch is trained fully; DiT gets a LoRA adapter (rank 32).
+# RGB pretrained weights stay frozen; the new semantic input/output channels
+# were zero-init'd (see expand_dit_for_semantics), so at step 0 the model produces
+# the same RGB as the pretrained checkpoint -- the semantic channels then learn.
+trainable_models: control_branch.*
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 32
+
+learning_rate: 5e-5              # bumped from smoke's 1e-5 -- 30 clips need faster learning to see anything in a day
+num_epochs: 10                   # 30 clips x 10 epochs = 300 steps -- one epoch ~= 25 min
+batch_size: 1                    # Wan 14B, single H100 can't fit more
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 4   # effective batch = 4
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v1
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: false
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5                    # log every 5 steps -- avoids spam over 300 steps
+save_freq: 0.25                  # 4 checkpoints per epoch -- catches partial progress
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+pretrained_path: null
+
+# ---- W&B ----
+wandb_project: neoverse-semantic
+wandb_run_name: rugd_v1
+wandb_mode: online
+
+# ---- Debug: OFF for a real run ----
+# The debug save_root wrote 3 MP4s per iteration for the smoke test. For 300+
+# iterations over 30 clips that would balloon to gigabytes of MP4s. Leave null.
+debug_save_root: null
