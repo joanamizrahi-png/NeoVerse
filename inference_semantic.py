@@ -270,8 +270,13 @@ def semantic_inference(
     # model wasn't trained to inpaint from a blank hint.
     if not disable_semantic_channels:
         if semantic_labels is not None:
+            # load_video may crop to num_frames < labels.shape[0] (SAM3 was run at
+            # the video's native length); slice labels to match if longer, error if shorter.
+            if semantic_labels.shape[0] > len(images):
+                semantic_labels = semantic_labels[:len(images)]
             assert semantic_labels.shape[0] == len(images), (
-                f"label frames {semantic_labels.shape[0]} != video frames {len(images)}"
+                f"label frames {semantic_labels.shape[0]} < video frames {len(images)}; "
+                f"re-run sam3_precompute_labels.py with --num_frames {len(images)}"
             )
             views["labels"] = torch.as_tensor(
                 semantic_labels, dtype=torch.long, device=device
