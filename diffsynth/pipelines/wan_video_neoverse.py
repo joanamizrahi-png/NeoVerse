@@ -329,6 +329,7 @@ class WanVideoNeoVersePipeline(BasePipeline):
         target_mask: Optional[torch.Tensor] = None,
         target_poses: Optional[torch.Tensor] = None,
         target_intrs: Optional[torch.Tensor] = None,
+        target_semantic: Optional[torch.Tensor] = None,
         # Randomness
         seed: Optional[int] = None,
         rand_device: Optional[str] = "cpu",
@@ -366,6 +367,7 @@ class WanVideoNeoVersePipeline(BasePipeline):
             "control_scale": control_scale, "source_views": source_views,
             "target_rgb": target_rgb, "target_depth": target_depth, "target_mask": target_mask,
             "target_poses": target_poses, "target_intrs": target_intrs,
+            "target_semantic": target_semantic,
             "seed": seed, "rand_device": rand_device,
             "height": height, "width": width, "num_frames": num_frames,
             "cfg_scale": cfg_scale, "sigma_shift": sigma_shift,
