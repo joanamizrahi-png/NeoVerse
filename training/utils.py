@@ -530,17 +530,32 @@ def launch_training_task(
                     log_writer.add_scalar("train_loss", loss_value_reduce, step)
                     log_writer.add_scalar("train_lr", lr, step)
                     log_writer.add_scalar("train_iter", epoch_1000x, step)
+                    # Pull the last RGB/semantic MSE split off the pipeline (set
+                    # inside training_loss). None on RGB-only runs.
+                    split_loss = None
+                    try:
+                        split_loss = getattr(
+                            accelerator.unwrap_model(model).pipe,
+                            "_last_split_loss",
+                            None,
+                        )
+                    except Exception:
+                        split_loss = None
+                    if split_loss is not None:
+                        log_writer.add_scalar("train_rgb_loss", split_loss["rgb"], step)
+                        log_writer.add_scalar("train_semantic_loss", split_loss["semantic"], step)
                     # Mirror to W&B when it's live. Gets us live loss curves on
                     # wandb.ai in addition to the local tensorboard writer.
                     if wandb_run is not None:
-                        wandb_run.log(
-                            {
-                                "train/loss": float(loss_value_reduce),
-                                "train/lr": lr,
-                                "train/epoch": epoch_f,
-                            },
-                            step=step,
-                        )
+                        log_dict = {
+                            "train/loss": float(loss_value_reduce),
+                            "train/lr": lr,
+                            "train/epoch": epoch_f,
+                        }
+                        if split_loss is not None:
+                            log_dict["train/rgb_loss"] = split_loss["rgb"]
+                            log_dict["train/semantic_loss"] = split_loss["semantic"]
+                        wandb_run.log(log_dict, step=step)
             # Guard the modulo: on a 1-clip smoke dataset, int(save_freq * len(dataloader))
             # rounds to 0 and % 0 crashes. Cap at 1 so the intermediate save silently no-ops
             # for tiny datasets (the outer iter_step != 0 check already skips the first step;

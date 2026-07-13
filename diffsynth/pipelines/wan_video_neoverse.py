@@ -87,8 +87,27 @@ class WanVideoNeoVersePipeline(BasePipeline):
         with torch.amp.autocast("cuda", dtype=self.torch_dtype):
             noise_pred = self.model_fn(**inputs, timestep=timestep)
 
-        loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
-        loss = loss * self.scheduler.training_weight(timestep)
+        pred_f = noise_pred.float()
+        tgt_f = training_target.float()
+        w = self.scheduler.training_weight(timestep)
+        loss = torch.nn.functional.mse_loss(pred_f, tgt_f) * w
+
+        # Observability: split MSE into RGB (first 16 latent channels) vs semantic
+        # (channels 16:) so wandb shows whether semantic is actually learning or
+        # whether all the loss reduction is coming from RGB. Same timestep weight
+        # so the split numbers are directly comparable to `loss`. Stashed on self
+        # so training/utils.py can log it without changing the return type.
+        C = pred_f.shape[1]
+        if C > 16:
+            rgb_l = torch.nn.functional.mse_loss(pred_f[:, :16], tgt_f[:, :16]) * w
+            sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:]) * w
+            self._last_split_loss = {
+                "rgb": float(rgb_l.detach()),
+                "semantic": float(sem_l.detach()),
+            }
+        else:
+            self._last_split_loss = None
+
         return loss
 
 
