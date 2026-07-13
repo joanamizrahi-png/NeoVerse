@@ -305,6 +305,24 @@ def semantic_inference(
         target_rgb[0, 0] = views["img"][0, 0].permute(1, 2, 0)
         target_mask[0, 0] = 1.0
 
+    # Second rasterizer pass over the SAME gaussians with feature="labels" produces
+    # the rough HOLEY semantic hint the DiT expects (control_branch's expanded 112-ch
+    # patch_embed = 32 latent + 16 semantic + 64 mask_cam). Without this, 4DPreprocesser's
+    # fast-path returns target_semantic=None and 4DEmbedder produces target_semantic_latents=None,
+    # which the control_branch then can't shape-match. Mirrors the training-time
+    # rasterization call at wan_video_neoverse.py:506.
+    target_semantic = None
+    if not disable_semantic_channels and "labels" in views:
+        sem_probs, _, _ = pipe.reconstructor.gs_renderer.rasterizer.forward(
+            gaussians,
+            render_viewmats=[target_world2cam],
+            render_Ks=[K_zoomed],
+            render_timestamps=[timestamps],
+            sh_degree=0, width=width, height=height,
+            feature="labels",
+        )
+        target_semantic = sem_probs.argmax(dim=-1).to(torch.long)
+
     wrapped_data = {
         "source_views": views,
         "target_rgb": target_rgb,
@@ -312,6 +330,7 @@ def semantic_inference(
         "target_mask": target_mask,
         "target_poses": target_cam2world.unsqueeze(0),
         "target_intrs": K_zoomed.unsqueeze(0),
+        "target_semantic": target_semantic,
     }
 
     # ---- 7. Monkey-patch VAE decode to split the 32-ch output ----

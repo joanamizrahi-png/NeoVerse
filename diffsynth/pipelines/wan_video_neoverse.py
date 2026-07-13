@@ -414,7 +414,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         **kwargs,
     ):
         super().__init__(
-            input_params=("source_views", "target_rgb", "target_depth", "target_mask", "target_poses", "target_intrs"),
+            input_params=("source_views", "target_rgb", "target_depth", "target_mask", "target_poses", "target_intrs", "target_semantic"),
             onload_model_names=("reconstructor",)
         )
         self.novel_view_sampling_trans = novel_view_sampling_trans
@@ -425,7 +425,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         self.alpha_thresh = alpha_thresh
         self.color_thresh = color_thresh
 
-    def process(self, pipe: WanVideoNeoVersePipeline, source_views, target_rgb, target_depth, target_mask, target_poses, target_intrs):
+    def process(self, pipe: WanVideoNeoVersePipeline, source_views, target_rgb, target_depth, target_mask, target_poses, target_intrs, target_semantic=None):
         if source_views is None:
             return {}
 
@@ -463,7 +463,12 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 "target_mask": target_mask,
                 "target_poses": target_poses,
                 "target_intrs": target_intrs,
-                "target_semantic": None,   # SEMANTIC FINETUNE: no re-rendering on caller-provided target
+                # SEMANTIC FINETUNE: honor caller-provided target_semantic on the fast
+                # path (used at inference where the caller pre-rasterized labels from
+                # gaussians it built itself). None means "no semantic hint" -- fine on
+                # RGB-only runs; on semantic-mode runs the caller must provide it or
+                # control_branch's expanded 112-ch patch_embed will crash.
+                "target_semantic": target_semantic,
                 "semantic_labels": semantic_labels,
             }
 
