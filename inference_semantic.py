@@ -199,6 +199,7 @@ def semantic_inference(
     alpha_threshold: float = 1.0,
     static_scene: bool = False,
     semantic_channels: int = 16,
+    semantic_labels: "np.ndarray | None" = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -263,16 +264,25 @@ def semantic_inference(
         views["timestamp"] = torch.arange(0, len(images), dtype=torch.int64, device=device).unsqueeze(0)
 
     # ---- 6b. Semantic hint at inference ----
-    # 4DPreprocesser only runs the labels-rasterizer pass when source_views has a
-    # "labels" tensor. Without it, 4DEmbedder returns target_semantic_latents=None,
-    # and control_branch's expanded 112-ch patch_embed sees only 96 ch (RGB+depth+mask_cam)
-    # -> shape mismatch. Zero-init labels feed the pipeline a "no hint / void everywhere"
-    # signal; the DiT still has to output semantics from RGB+depth context alone.
-    # Once we run SAM3 on the input clip, we can replace this with real class ids.
+    # Real SAM3-of-input-frames labels: matches the training-time hint distribution
+    # (holey semantic rasterization from labeled Gaussians). Fall back to zeros only
+    # if the caller didn't pass any -- that gives palette-noise output because the
+    # model wasn't trained to inpaint from a blank hint.
     if not disable_semantic_channels:
-        views["labels"] = torch.zeros(
-            (1, len(images), height, width), dtype=torch.uint8, device=device
-        )
+        if semantic_labels is not None:
+            assert semantic_labels.shape[0] == len(images), (
+                f"label frames {semantic_labels.shape[0]} != video frames {len(images)}"
+            )
+            views["labels"] = torch.as_tensor(
+                semantic_labels, dtype=torch.long, device=device
+            ).unsqueeze(0)  # [1, N, H, W]
+            print(f"Using SAM3 semantic labels: {views['labels'].shape}", flush=True)
+        else:
+            views["labels"] = torch.zeros(
+                (1, len(images), height, width), dtype=torch.uint8, device=device
+            )
+            print("WARNING: no --semantic_labels provided; using zero hint. "
+                  "Semantic output will likely be palette-noise.", flush=True)
 
     with torch.amp.autocast("cuda", dtype=pipe.torch_dtype):
         predictions = pipe.reconstructor(views, is_inference=True, use_motion=False)
@@ -322,6 +332,21 @@ def semantic_inference(
             feature="labels",
         )
         target_semantic = sem_probs.argmax(dim=-1).to(torch.long)
+
+        # Save the RAW rasterized holey semantic hint so we can compare it
+        # side-by-side with the diffusion-inpainted output. The point of the
+        # semantic finetune is that the diffusion fills holes in this hint;
+        # this MP4 is the "before", semantic.mp4 is the "after".
+        os.makedirs(output_dir, exist_ok=True)
+        holey_labels = target_semantic[0].detach().cpu().numpy().astype(np.int8)
+        palette = (CLASS_COLORS.detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
+        holey_rgb = palette[np.clip(holey_labels, 0, NUM_CLASSES - 1)]  # [T, H, W, 3]
+        import imageio.v3 as iio
+        holey_out = os.path.join(output_dir, "holey_semantic.mp4")
+        iio.imwrite(holey_out, holey_rgb, fps=16,
+                    codec="libx264", macro_block_size=1,
+                    ffmpeg_params=["-pix_fmt", "yuv420p"])
+        print(f"Saved holey semantic hint: {holey_out}", flush=True)
 
     wrapped_data = {
         "source_views": views,
@@ -407,6 +432,9 @@ def parse_args():
     p.add_argument("--static_scene", action="store_true")
     p.add_argument("--semantic_channels", type=int, default=16,
                    help="Must match training-time value")
+    p.add_argument("--semantic_labels", default=None,
+                   help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
+                        "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
     return p.parse_args()
 
 
@@ -414,6 +442,19 @@ def main():
     args = parse_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+
+    # Load SAM3 labels: explicit --semantic_labels, or auto-derive from input filename.
+    # Mirrors vanilla inference.py's convention: outputs/sam3_labels/<stem>.npz
+    semantic_labels = None
+    labels_path = args.semantic_labels
+    if labels_path is None:
+        stem = os.path.splitext(os.path.basename(args.input_path))[0]
+        auto = os.path.join("outputs/sam3_labels", f"{stem}.npz")
+        labels_path = auto if os.path.exists(auto) else None
+    if labels_path is not None:
+        semantic_labels = np.load(labels_path)["labels"]
+        print(f"Loaded semantic labels from {labels_path}: {semantic_labels.shape}", flush=True)
+
     semantic_inference(
         input_path=args.input_path,
         checkpoint=args.checkpoint,
@@ -431,6 +472,7 @@ def main():
         use_lora=not args.disable_lora,
         static_scene=args.static_scene,
         semantic_channels=args.semantic_channels,
+        semantic_labels=semantic_labels,
     )
 
 
