@@ -152,6 +152,21 @@ if __name__ == "__main__":
         model.pipe.save_root = debug_save_root
         os.makedirs(debug_save_root, exist_ok=True)
         print(f"[debug] pipe.save_root = {debug_save_root}")
+
+    # WARM-START: overlay a previous finetune checkpoint on top of the initialized
+    # model. Guarded by the yaml `pretrained_path` field (null / missing => no-op).
+    # v3's checkpoints saved trainable params only, with `remove_prefix_in_ckpt: pipe.`
+    # stripping the "pipe." prefix -- re-add it so keys line up with WanTrainingModule.
+    # strict=False because the checkpoint intentionally omits frozen params.
+    pretrained_path = getattr(args, "pretrained_path", None)
+    if pretrained_path is not None:
+        from safetensors.torch import load_file
+        sd = {f"pipe.{k}": v for k, v in load_file(pretrained_path).items()}
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        print(f"[pretrained_path] loaded {len(sd)} tensors from {pretrained_path}")
+        print(f"[pretrained_path] missing={len(missing)}, unexpected={len(unexpected)}")
+        if unexpected:
+            print(f"[pretrained_path] first unexpected: {unexpected[0]}")
     optimizer = torch.optim.AdamW(model.trainable_modules(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
     launch_training_task(
