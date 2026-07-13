@@ -40,6 +40,8 @@ import torch
 from safetensors.torch import load_file
 from torchvision.transforms import functional as F
 
+from peft import LoraConfig, inject_adapter_in_model
+
 from diffsynth.pipelines.wan_video_neoverse import WanVideoNeoVersePipeline
 from diffsynth import save_video
 from diffsynth.utils.auxiliary import CameraTrajectory, load_video, homo_matrix_inverse
@@ -50,6 +52,19 @@ from diffsynth.utils.semantics import (
     NUM_CLASSES,
     rgb_to_labels,
 )
+
+
+def _inject_lora_for_finetune(pipe, rank: int = 32, target_modules=None):
+    """Inject peft LoRA slots into DiT to match training-time injection.
+
+    Training used lora_base_model="dit", target_modules="q,k,v,o,ffn.0,ffn.2",
+    rank=32. Without this, the checkpoint's `blocks.*.self_attn.q.lora_A.default.weight`
+    keys are unexpected and get silently dropped -- the finetune is effectively unloaded.
+    """
+    if target_modules is None:
+        target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2"]
+    lora_config = LoraConfig(r=rank, lora_alpha=rank, target_modules=target_modules)
+    pipe.dit = inject_adapter_in_model(lora_config, pipe.dit)
 
 
 def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) -> None:
@@ -211,6 +226,11 @@ def semantic_inference(
             expand_control_branch_for_semantics(pipe.control_branch, extra=semantic_channels)
         print(f"Applied semantic expansion (+{semantic_channels} latent channels)", flush=True)
 
+    # ---- 2b. Inject LoRA on DiT to match training. Must happen BEFORE checkpoint load
+    # or the LoRA weights get discarded as unexpected keys.
+    _inject_lora_for_finetune(pipe, rank=32)
+    print("Injected LoRA slots on DiT (rank 32)", flush=True)
+
     # ---- 3. Load finetune weights ----
     _load_finetune_checkpoint(pipe, checkpoint)
 
@@ -241,6 +261,18 @@ def semantic_inference(
     else:
         views["is_static"] = torch.zeros((1, len(images)), dtype=torch.bool, device=device)
         views["timestamp"] = torch.arange(0, len(images), dtype=torch.int64, device=device).unsqueeze(0)
+
+    # ---- 6b. Semantic hint at inference ----
+    # 4DPreprocesser only runs the labels-rasterizer pass when source_views has a
+    # "labels" tensor. Without it, 4DEmbedder returns target_semantic_latents=None,
+    # and control_branch's expanded 112-ch patch_embed sees only 96 ch (RGB+depth+mask_cam)
+    # -> shape mismatch. Zero-init labels feed the pipeline a "no hint / void everywhere"
+    # signal; the DiT still has to output semantics from RGB+depth context alone.
+    # Once we run SAM3 on the input clip, we can replace this with real class ids.
+    if not disable_semantic_channels:
+        views["labels"] = torch.zeros(
+            (1, len(images), height, width), dtype=torch.uint8, device=device
+        )
 
     with torch.amp.autocast("cuda", dtype=pipe.torch_dtype):
         predictions = pipe.reconstructor(views, is_inference=True, use_motion=False)
