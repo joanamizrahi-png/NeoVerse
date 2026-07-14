@@ -31,55 +31,63 @@ import torch
 from decord import VideoReader
 from transformers import Sam3Model, Sam3Processor
 
-# --- EDIT HERE: prompt, RGB color, traversable. Order = priority (later overwrites earlier). ---
+# --- EDIT HERE: prompt, RGB color, traversable, PRIORITY. ---
 # 29-class outdoor Go2W taxonomy (class ids 1..29; void=0 handled as "unlabeled").
-# Colors MUST stay identical to diffsynth/utils/semantics.py CLASS_COLORS[1:] and TRAVERSABLE
-# flags MUST match nav-rl/src/env/reward.py TRAVERSABLE. Ordering encodes SAM3 priority (later
-# wins) AND the class-id space -- all three files must be updated in lockstep.
 #
-# Priority layering (bottom -> top):
-#   sky -> ground materials -> ground hazards -> pavement materials -> pavement functions ->
-#   large statics -> vegetation -> small verticals + stairs -> dynamic objects.
-# Dynamics come last so a person/vehicle on a road stays labeled person/vehicle.
+# LOCKSTEP CONTRACT:
+#   * CLASS ID = position in this list + 1 (position 0 -> id 1, ...). NEVER change positions
+#     without invalidating diffsynth/utils/semantics.CLASS_COLORS + all trained checkpoints
+#     + every saved .npz label file. Position is baked in permanently.
+#   * PRIORITY = the 4th tuple element. Independent from position. Governs which class wins
+#     on pixel overlap: HIGHER priority number = processed LATER = OVERRIDES lower priority.
+#     Safe to edit without breaking checkpoints / label files.
+#
+# Priority principle: MORE GENERAL / CATCH-ALL categories should have LOWER priority so
+# more SPECIFIC categories (which are more useful for RL reward) override them on overlap.
+# Person / vehicle stay at the top (safety critical).
+# Vegetation is at the BOTTOM of the plant group so tree, log, grass etc override it --
+# the SAM3 'vegetation' prompt tends to grab everything green including rocks and trunks.
 CLASSES = [
-    # ambient
-    ("sky",           (200, 225, 245), False),
-    # ground materials (default ground layer)
-    ("dirt",          (139,  90,  43), True),   # FLAG: revisit -- may not be Go2W-traversable when loose
-    ("sand",          (230, 200, 155), True),   # FLAG: revisit -- loose sand may not be Go2W-traversable
-    ("grass",         ( 75, 190,  80), True),
-    ("gravel",        (180, 155, 100), True),
-    ("mulch",         (110,  55,  25), True),
-    # ground hazards
-    ("mud",           ( 55,  55,  30), False),
-    ("water",         ( 50, 120, 200), False),
-    ("rock",          (135, 145, 155), False),
-    # pavement materials
-    ("asphalt",       ( 55,  55,  65), True),
-    ("concrete",      (225, 220, 190), True),
-    # pavement functions (override materials for paved surfaces)
-    ("road",          (110, 110, 115), True),
-    ("sidewalk",      (180, 180, 180), True),
-    ("crosswalk",     (255, 250, 235), True),
-    # large vertical statics
-    ("building",      (170,  75,  60), False),
-    ("wall",          (175, 145, 175), False),
-    ("fence",         ( 90,  60, 130), False),
-    ("bridge",        ( 75, 155, 175), True),
-    # vegetation
-    ("tree",          ( 40, 105,  55), False),
-    ("vegetation",    (170, 200,  55), False),  # was 'bush' in RUGD; broadened to shrubs/undergrowth
-    ("log",           (135, 115,  90), False),
-    # small vertical + climbable
-    ("stairs",        (220, 140,  80), True),   # Go2W handles stairs
-    ("pole",          ( 25,  65, 130), False),
-    ("traffic sign",  (230, 195,  60), False),
-    ("traffic light", (235,  85,  75), False),
-    # dynamic (top priority -- override everything they occlude)
-    ("vehicle",       (110, 130, 220), False),
-    ("motorcycle",    (155,  60, 200), False),
-    ("bicycle",       (100, 230, 200), False),
-    ("person",        (205,  70, 145), False),
+    # (name, RGB color, traversable, priority)
+    # ---- ambient ----
+    ("sky",           (200, 225, 245), False,  10),
+    # ---- ground materials ----
+    ("dirt",          (139,  90,  43), True,   50),
+    ("sand",          (230, 200, 155), True,   50),
+    ("grass",         ( 75, 190,  80), True,   55),   # specific > vegetation
+    ("gravel",        (180, 155, 100), True,   50),
+    ("mulch",         (110,  55,  25), True,   50),
+    # ---- ground hazards ----
+    ("mud",           ( 55,  55,  30), False,  60),
+    ("water",         ( 50, 120, 200), False,  60),
+    ("rock",          (135, 145, 155), False,  60),   # rocks are specific > vegetation
+    # ---- pavement materials ----
+    ("asphalt",       ( 55,  55,  65), True,   70),
+    ("concrete",      (225, 220, 190), True,   70),
+    # ---- pavement functions (override materials) ----
+    ("road",          (110, 110, 115), True,   80),
+    ("sidewalk",      (180, 180, 180), True,   80),
+    ("crosswalk",     (255, 250, 235), True,   85),
+    # ---- VEGETATION (low priority -- catch-all, overridden by specifics) ----
+    ("vegetation",    (170, 200,  55), False,  30),   # loses to grass, tree, log, rock, building, wall
+    # ---- vegetation specifics (override generic vegetation) ----
+    ("tree",          ( 40, 105,  55), False,  90),   # tree trunk beats generic "vegetation"
+    ("log",           (135, 115,  90), False,  90),
+    # ---- large vertical statics ----
+    ("building",      (170,  75,  60), False, 100),
+    ("wall",          (175, 145, 175), False, 100),
+    ("fence",         ( 90,  60, 130), False, 100),
+    ("bridge",        ( 75, 155, 175), True,  100),
+    # ---- small vertical + climbable ----
+    ("stairs",        (220, 140,  80), True,  110),
+    ("pole",          ( 25,  65, 130), False, 110),
+    ("traffic sign",  (230, 195,  60), False, 120),
+    ("traffic light", (235,  85,  75), False, 120),
+    # ---- dynamic (top priority -- override everything they occlude) ----
+    ("vehicle",       (110, 130, 220), False, 200),
+    ("motorcycle",    (155,  60, 200), False, 210),
+    ("bicycle",       (100, 230, 200), False, 210),
+    ("person",        (205,  70, 145), False, 250),
 ]
 
 
@@ -161,7 +169,9 @@ def main():
         names = [p.strip() for p in args.prompts.split(",") if p.strip()]
         palette = [(128, 128, 128), (0, 0, 255), (255, 0, 0), (0, 180, 0),
                    (140, 70, 20), (210, 180, 140), (255, 165, 0), (160, 32, 240)]
-        CLASSES = [(n, palette[i % len(palette)], False) for i, n in enumerate(names)]
+        # Custom prompts: assign priority = position (later class wins), matching
+        # the pre-priority-refactor behavior for one-off debug runs.
+        CLASSES = [(n, palette[i % len(palette)], False, i) for i, n in enumerate(names)]
         print(f"using custom prompts: {names}")
 
     # SAME frame loading as inference.py -> guarantees label/frame alignment
@@ -187,7 +197,19 @@ def main():
     model.eval()
 
     labels = np.zeros((N, H, W), dtype=np.int8)   # 0 = unlabeled, 1..C = class
-    colors = np.array([(0, 0, 0)] + [c for _, c, _ in CLASSES], dtype=np.uint8)
+    colors = np.array([(0, 0, 0)] + [c for _, c, _, _ in CLASSES], dtype=np.uint8)
+
+    # Build (class_id, name, color, trav, priority) tuples. class_id = position + 1
+    # (stable, tied to CLASS_COLORS / trained checkpoints / saved .npz files).
+    # Sort by priority ASCENDING so LOWER-priority classes are processed FIRST and
+    # HIGHER-priority classes overwrite them on overlap. This lets vegetation (low
+    # priority) be assigned first and get overridden by tree, grass, rock, wall etc.
+    # class_id stays fixed regardless of iteration order -- only overlap-resolution changes.
+    _classes_with_ids = [(i + 1, n, c, t, p) for i, (n, c, t, p) in enumerate(CLASSES)]
+    _iter_order = sorted(_classes_with_ids, key=lambda x: x[4])
+    print(f"[priority-order] processing {len(_iter_order)} classes low->high priority; "
+          f"first 5: {[(cid, name, prio) for cid, name, _c, _t, prio in _iter_order[:5]]}", flush=True)
+
     t0 = time.time()
     for fi, img in enumerate(frames):
         img = img.convert("RGB")
@@ -199,8 +221,8 @@ def main():
             vision_embeds = model.get_vision_features(pixel_values=img_inputs.pixel_values)
         target_sizes = img_inputs.get("original_sizes").tolist()
 
-        # per-class inference: text encoder + DETR decoder + mask head only (cheap)
-        for ci, (name, _color, _trav) in enumerate(CLASSES, start=1):
+        # per-class inference in PRIORITY order (low priority first, high priority last => wins)
+        for ci, name, _color, _trav, _prio in _iter_order:
             text_inputs = processor(text=name, return_tensors="pt").to(model.device)
             with torch.no_grad():
                 outputs = model(vision_embeds=vision_embeds, **text_inputs)
@@ -235,9 +257,9 @@ def main():
     np.savez_compressed(
         out_npz,
         labels=labels,                                   # [N,H,W] int8
-        class_names=np.array(["unlabeled"] + [n for n, _, _ in CLASSES]),
+        class_names=np.array(["unlabeled"] + [n for n, _, _, _ in CLASSES]),
         class_colors=colors,                             # [C+1,3]
-        traversable=np.array([False] + [t for _, _, t in CLASSES]),
+        traversable=np.array([False] + [t for _, _, t, _ in CLASSES]),
         num_frames=N, height=H, width=W,
     )
     print(f"\nsaved {out_npz}  (labels {labels.shape}, {len(CLASSES)} classes + background)", flush=True)
