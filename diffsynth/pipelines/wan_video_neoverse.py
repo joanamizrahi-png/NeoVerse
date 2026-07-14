@@ -512,8 +512,12 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         # labels attached (via the dataloader), also render the "labels" feature at the
         # target trajectory. Produces the ROUGH HOLEY semantic that the diffusion will
         # inpaint into a clean semantic. Gaussians in unseen regions -> no label -> hole.
+        # The labels rasterization allocates a [T, H, W, num_classes+1] tensor per frame
+        # (~30x the 3-channel RGB pass), so we release the RGB pass's cached blocks
+        # before it runs. v4 OOM'd here on a heavy clip when max_mem was already at 73GB.
         target_semantic = None
         if getattr(pipe, "semantic_channels", 0) > 0 and "labels" in source_views:
+            torch.cuda.empty_cache()
             sem_probs, _, _ = pipe.reconstructor.gs_renderer.rasterizer.forward(
                 splats,
                 render_viewmats=homo_matrix_inverse(recon_output["rendered_extrinsics"]),
