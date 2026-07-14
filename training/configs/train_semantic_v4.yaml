@@ -1,0 +1,79 @@
+# v4: fix the frozen semantic-slot bug + warm-start from v3.
+# v3 problem: dit.patch_embedding (rows 16:32) and dit.head (rows 16:32) were
+# zero-init and stayed frozen at zero throughout training because peft's LoRA
+# injection freezes non-target modules and trainable_models didn't cover them.
+# Result: the model predicted noise=0 for semantic channels -> palette-shaped
+# noise output regardless of hint quality.
+#
+# v4 fix (the important one): add dit.patch_embedding + dit.head to trainable_models
+# so freeze_except unfreezes them.
+# v4 secondary: weighted semantic loss (SEM_WEIGHT=4 in training_loss) + higher LR
+# + longer training + warm-start from v3 epoch-7 (for the RGB LoRA + control_branch
+# weights that DID train correctly).
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+
+# Same 46-clip combined RUGD + Cityscapes dataset as v3.
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/combined_train_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# THE core v4 fix: include dit.patch_embedding + dit.head so freeze_except
+# unfreezes them. Without this line the raw semantic slot weights stay at zero-init.
+trainable_models: control_branch.*,dit.patch_embedding,dit.head
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 32
+
+# Warm-start from v3's best checkpoint. Loads control_branch + LoRA weights on
+# top of the initialized model. patch_embedding + head weren't saved by v3 (they
+# were frozen), so they start at zero-init and train fresh -- exactly what we want.
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v3/checkpoint-epoch-7.safetensors
+
+learning_rate: 1e-4              # 2x v3 -- semantic slots start from zero
+num_epochs: 15
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1   # v3 confirmed grad-accum=4 OOMs on H100
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v4
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: combined_v4_unfroze_sem_slots
+wandb_mode: online
+
+debug_save_root: null

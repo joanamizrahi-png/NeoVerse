@@ -90,22 +90,26 @@ class WanVideoNeoVersePipeline(BasePipeline):
         pred_f = noise_pred.float()
         tgt_f = training_target.float()
         w = self.scheduler.training_weight(timestep)
-        loss = torch.nn.functional.mse_loss(pred_f, tgt_f) * w
 
-        # Observability: split MSE into RGB (first 16 latent channels) vs semantic
-        # (channels 16:) so wandb shows whether semantic is actually learning or
-        # whether all the loss reduction is coming from RGB. Same timestep weight
-        # so the split numbers are directly comparable to `loss`. Stashed on self
-        # so training/utils.py can log it without changing the return type.
+        # Weighted RGB + semantic loss. In vanilla MSE across 32 channels, RGB and
+        # semantic each contribute half of the elements -- but semantic gradient
+        # signal ends up too weak in practice (v3 outcome). SEM_WEIGHT tips the
+        # scale so the model actually invests capacity in the semantic slot.
+        # On RGB-only runs (C <= 16), falls back to plain 32-ch MSE.
+        SEM_WEIGHT = float(getattr(self, "semantic_loss_weight", 4.0))
         C = pred_f.shape[1]
         if C > 16:
-            rgb_l = torch.nn.functional.mse_loss(pred_f[:, :16], tgt_f[:, :16]) * w
-            sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:]) * w
+            rgb_l = torch.nn.functional.mse_loss(pred_f[:, :16], tgt_f[:, :16])
+            sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:])
+            loss = (rgb_l + SEM_WEIGHT * sem_l) * w
+            # Stash pre-weight split values for wandb observability (comparable to
+            # the RGB-side and unweighted-semantic components of `loss`).
             self._last_split_loss = {
-                "rgb": float(rgb_l.detach()),
-                "semantic": float(sem_l.detach()),
+                "rgb": float((rgb_l * w).detach()),
+                "semantic": float((sem_l * w).detach()),
             }
         else:
+            loss = torch.nn.functional.mse_loss(pred_f, tgt_f) * w
             self._last_split_loss = None
 
         return loss
