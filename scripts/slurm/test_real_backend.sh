@@ -37,7 +37,7 @@ mkdir -p "$NAVRL_ROOT/outputs/backend_test"
 python scripts/test_real_backend.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/rugd_park-1_00.mp4 \
     --output_dir /scratch/m000204-pm06b/joana/nav-rl/outputs/backend_test \
-    --render_mode rasterizer_only \
+    --render_mode rasterizer_plus_diffusion \
     --num_frames 16
 
 echo "==> RealWorldBackend integration test done"
