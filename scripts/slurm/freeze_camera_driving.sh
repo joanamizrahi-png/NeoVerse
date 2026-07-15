@@ -3,8 +3,8 @@
 #SBATCH --account=marlowe-m000204-pm06b
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96G
 #SBATCH --time=00:20:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/slurm-%j.err
@@ -28,7 +28,7 @@ hash -r
 
 cd /scratch/m000204-pm06b/joana/NeoVerse
 
-# args: FREEZE_FRAME=0, N_FRAMES=24 (matches script defaults)
-python freeze_camera_demo.py 0 24
+# args: FREEZE_FRAME=0, N_FRAMES=12 (24 OOM'd the H100 on the previous run)
+python freeze_camera_demo.py 0 12
 
 echo "==> freeze_camera_demo done; outputs in outputs/freeze_camera/"
