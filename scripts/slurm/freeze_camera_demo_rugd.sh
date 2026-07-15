@@ -39,7 +39,7 @@ if [ -e "$TMP_LINK" ] && [ ! -L "$TMP_LINK" ]; then
 fi
 ln -sf /scratch/m000204-pm06b/joana/data/rugd_clips/rugd_park-1_00.mp4 "$TMP_LINK"
 
-python freeze_camera_demo.py 0 24
+python freeze_camera_demo.py 0 12
 
 # Move outputs to a park-specific dir so they don't collide with the driving version.
 mkdir -p /scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera_rugd_park
