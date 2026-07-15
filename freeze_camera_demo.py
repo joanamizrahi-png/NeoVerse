@@ -67,12 +67,12 @@ def render(viewmats, ks, ts, feature="rgb"):
 
 
 def save_rgb(t, path):
-    arr = (t[0].clamp(0, 1).float().cpu().numpy() * 255).astype(np.uint8)  # [N,H,W,3]
+    arr = (t[0].detach().clamp(0, 1).float().cpu().numpy() * 255).astype(np.uint8)  # [N,H,W,3]
     imageio.mimsave(path, list(arr), fps=16)
 
 
 def save_sem(t, path):
-    idx = t[0].argmax(-1).cpu().numpy().astype(np.int32)   # [N,H,W]
+    idx = t[0].detach().argmax(-1).cpu().numpy().astype(np.int32)   # [N,H,W]
     imageio.mimsave(path, list(colors[idx]), fps=16)
 
 
