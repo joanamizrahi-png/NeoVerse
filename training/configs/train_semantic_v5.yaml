@@ -1,0 +1,89 @@
+# v5: fix v4's RGB-degradation bug + train on cleaner labels.
+#
+# v4 outcome (2026-07-14):
+#   - Semantic showed some structure (fix helped) but was still noisy.
+#   - RGB degraded noticeably from pretrained baseline.
+#   - Root cause: adding dit.patch_embedding + dit.head to trainable_models
+#     unfroze ALL 32 channels of each module, including the RGB half (0-15).
+#     Weighted loss (1x RGB, 4x semantic) still gave RGB some gradient signal
+#     on weights that should have stayed at pretrained values -> drift.
+#
+# v5 fix:
+#   - REMOVE dit.patch_embedding + dit.head from trainable_models (revert v4).
+#   - Instead, add them to lora_target_modules. LoRA adds LOW-RANK updates
+#     while keeping the base weights UNCHANGED. RGB stays clean, semantic
+#     slots (which are zero in the base) learn via the LoRA increment.
+#   - Warm-start from v3 epoch-7 (clean RGB, zero semantic slots). NOT from v4
+#     epoch-5 (RGB already degraded).
+#   - Train on the newly-relabeled 46 clips (SAM3 priority fix applied),
+#     assumes scripts/slurm/relabel_all_clips.sh has run first.
+#   - Keep SEM_WEIGHT=4 (worked in v4 to drive semantic gradient).
+#   - 15 epochs (v4 was cut short at 5; give it real training time).
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/combined_train_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# REVERT v4's over-unfreeze. Only control_branch is fully trained; DiT is
+# LoRA-only (with patch_embedding + head.head added to targets — v5 fix).
+trainable_models: control_branch.*
+lora_base_model: dit
+# ADDED patch_embedding + head.head to LoRA. LoRA gives us trainable low-rank
+# updates on those modules without disturbing the pretrained RGB weights.
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2,patch_embedding,head.head"
+lora_exclude_modules: null
+lora_rank: 32
+
+# WARM-START from v3 epoch-7. v3 has clean RGB (LoRA on q/k/v/o/ffn only,
+# no semantic learning) + zero semantic slots. Perfect starting point for
+# v5 to build semantic on top of clean RGB.
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v3/checkpoint-epoch-7.safetensors
+
+learning_rate: 1e-4
+num_epochs: 15
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v5
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v5_lora_on_head_warmstart_v3
+wandb_mode: online
+
+debug_save_root: null
