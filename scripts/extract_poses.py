@@ -22,7 +22,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
+
+# Make NeoVerse root importable when run as `python scripts/extract_poses.py`.
+# Python only puts the script's own directory on sys.path, so `diffsynth` (at repo root)
+# would otherwise not be findable.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import torch
