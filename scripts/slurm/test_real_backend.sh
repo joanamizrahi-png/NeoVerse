@@ -21,14 +21,14 @@ export PATH=/users/jmizrahi/.conda/envs/neoverse/bin:$PATH
 export PYTHONNOUSERSITE=1
 hash -r
 
-# nav-rl code must already be on Marlowe. To update it, rsync from Mac:
-#   rsync -avz --exclude='data/' --exclude='outputs/' --exclude='__pycache__/' \
-#     "path/to/nav-rl/" jmizrahi@login.marlowe.stanford.edu:/scratch/m000204-pm06b/joana/nav-rl/
-# (nav-rl is a PRIVATE github repo so we can't `git clone` it from a compute node.)
+# nav-rl code — clone if missing, pull if present. nav-rl is now public so this
+# works from a compute node without credentials (same as NeoVerse).
 NAVRL_ROOT=/scratch/m000204-pm06b/joana/nav-rl
-if [ ! -d "$NAVRL_ROOT/src" ]; then
-    echo "ERROR: $NAVRL_ROOT/src not found. Rsync nav-rl from your Mac first." >&2
-    exit 1
+if [ ! -d "$NAVRL_ROOT/.git" ]; then
+    [ -d "$NAVRL_ROOT" ] && rm -rf "$NAVRL_ROOT"
+    git clone https://github.com/joanamizrahi-png/nav-rl.git "$NAVRL_ROOT"
+else
+    (cd "$NAVRL_ROOT" && git pull)
 fi
 
 cd "$NAVRL_ROOT"
