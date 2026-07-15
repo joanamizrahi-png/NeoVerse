@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
-#SBATCH --time=12:00:00
+#SBATCH --time=16:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/runs/train_semantic_v5/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/runs/train_semantic_v5/slurm-%j.err
 

@@ -56,13 +56,15 @@ lora_target_modules: "q,k,v,o,ffn.0,ffn.2,patch_embedding,head.head"
 lora_exclude_modules: null
 lora_rank: 32
 
-# WARM-START from v3 epoch-7. v3 has clean RGB (LoRA on q/k/v/o/ffn only,
-# no semantic learning) + zero semantic slots. Perfect starting point for
-# v5 to build semantic on top of clean RGB.
-pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v3/checkpoint-epoch-7.safetensors
+# NO warm-start. v3 was trained on OLD SAM3 labels (vegetation-runaway priority);
+# any learned patterns there would carry over as noise on top of the priority-fixed
+# label distribution. Fresh start from base Wan pretrained is a cleaner starting
+# point -- base pretrained RGB is already high quality, we just need the LoRA
+# adapters to learn from priority-fixed data.
+pretrained_path: null
 
 learning_rate: 1e-4
-num_epochs: 15
+num_epochs: 20
 batch_size: 1
 num_workers: 2
 pin_memory: false
