@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=00:30:00
-#SBATCH --output=/scratch/m000204-pm06b/joana/nav-rl/outputs/backend_test/slurm-%j.out
-#SBATCH --error=/scratch/m000204-pm06b/joana/nav-rl/outputs/backend_test/slurm-%j.err
+#SBATCH --output=/scratch/m000204-pm06b/joana/slurm_logs/backend_test-slurm-%j.out
+#SBATCH --error=/scratch/m000204-pm06b/joana/slurm_logs/backend_test-slurm-%j.err
 
 # Integration test for RealWorldBackend: renders 4 poses of rugd_park-1_00
 # via NeoVerse's pipeline through the WorldBackend abstraction. If images
