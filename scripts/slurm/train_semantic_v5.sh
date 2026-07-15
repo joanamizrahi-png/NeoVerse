@@ -75,7 +75,9 @@ for _, row in meta.iterrows():
         continue
     n_v = len(VideoReader(vp))
     n_l = np.load(lp)["labels"].shape[0]
-    if n_v != n_l:
+    # RUGD clips are 82 frames; SAM3 defaults to num_frames=81 -> off-by-one is normal.
+    # spatialvid.py clips the label index to the array's bounds. Only bail on big mismatch.
+    if abs(n_v - n_l) > 3:
         missing += 1
         continue
     ok += 1

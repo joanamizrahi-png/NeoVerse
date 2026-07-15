@@ -77,7 +77,13 @@ class SpatialVID(BaseDataset):
             if osp.exists(labels_path):
                 with np.load(labels_path) as d:
                     all_labels = d["labels"]                # [N_total, H, W] int8
-                per_frame_labels = all_labels[sample_index]  # [num_views, H, W]
+                # sam3_precompute_labels defaults to num_frames=81 while our RUGD clips
+                # are 82 frames (ffmpeg's repeat-last-frame quirk in prepare_rugd_clips).
+                # sample_index can therefore contain values up to video_length-1 (=81),
+                # while all_labels has only 81 rows (max valid index 80). Clip to the
+                # label array's bounds so the last video frame reuses the last label.
+                safe_index = np.minimum(sample_index, len(all_labels) - 1)
+                per_frame_labels = all_labels[safe_index]   # [num_views, H, W]
 
         context_views = []
         target_views = []
