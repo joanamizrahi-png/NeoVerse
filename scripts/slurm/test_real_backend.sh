@@ -15,27 +15,27 @@
 
 set -euo pipefail
 
-mkdir -p /scratch/m000204-pm06b/joana/nav-rl/outputs/backend_test
-
 module load conda/24.3.0-0
 module load cuda12.9/toolkit/12.9.1
 export PATH=/users/jmizrahi/.conda/envs/neoverse/bin:$PATH
 export PYTHONNOUSERSITE=1
 hash -r
 
-# Install nav-rl deps if missing (won't hurt if already installed).
-python -c "import gymnasium" 2>/dev/null || python -m pip install --quiet gymnasium
-python -c "import stable_baselines3" 2>/dev/null || python -m pip install --quiet "stable-baselines3[extra]"
-
-# The nav-rl repo needs to be on Marlowe too. Clone if not present.
+# The nav-rl repo needs to be on Marlowe. Clone if not present, pull if it is.
+# Do this BEFORE any mkdir of subdirs to avoid "destination path already exists".
 NAVRL_ROOT=/scratch/m000204-pm06b/joana/nav-rl
 if [ ! -d "$NAVRL_ROOT/.git" ]; then
+    # An empty or non-git directory here would make git clone fail; wipe if so.
+    [ -d "$NAVRL_ROOT" ] && rm -rf "$NAVRL_ROOT"
     git clone https://github.com/joanamizrahi-png/nav-rl.git "$NAVRL_ROOT"
 else
     (cd "$NAVRL_ROOT" && git pull)
 fi
 
 cd "$NAVRL_ROOT"
+
+# NOW create the output dir INSIDE the cloned repo (outputs/ is gitignored).
+mkdir -p /scratch/m000204-pm06b/joana/nav-rl/outputs/backend_test
 
 python scripts/test_real_backend.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/rugd_park-1_00.mp4 \
