@@ -410,8 +410,21 @@ def semantic_inference(
         return
 
     labels, sem_rgb = _sem_video_to_labels_and_colorized(sink["sem_video"])
-    # Save colorized semantic mp4
     import imageio.v3 as iio
+
+    # Save the RAW VAE-decoded semantic video BEFORE palette snapping. semantic.mp4
+    # snaps every pixel to the nearest palette color, which turns any blur into
+    # per-pixel class confetti — it cannot distinguish "smooth but blurry prediction"
+    # (fixable: sharpen with more training / better sampling) from "true noise"
+    # (architecture problem). This video can.
+    raw_rgb = _decoded_video_to_uint8(sink["sem_video"])
+    raw_out = os.path.join(output_dir, "semantic_raw.mp4")
+    iio.imwrite(raw_out, raw_rgb, fps=16,
+                codec="libx264", macro_block_size=1,
+                ffmpeg_params=["-pix_fmt", "yuv420p"])
+    print(f"Saved RAW decoded semantic MP4: {raw_out}", flush=True)
+
+    # Save colorized (palette-snapped) semantic mp4
     sem_out = os.path.join(output_dir, "semantic.mp4")
     iio.imwrite(sem_out, sem_rgb, fps=16,
                 codec="libx264", macro_block_size=1,
