@@ -23,29 +23,64 @@ class WanTrainingModule(DiffusionTrainingModule):
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
         semantic_channels: int = 0,   # SEMANTIC FINETUNE: 0 = disabled (default), 16 = enabled
+        semantic_expansion_version: int = 1,  # 1 = v3/4/5 in-place grow, 2 = v6 parallel _sem
+        distill_lora_path: str = None,        # v6: merge lightx2v distill LoRA at TRAIN time
+        distill_lora_alpha: float = 1.0,      # so train + eval share the same 4-step regime
+        semantic_loss_weight: float = 4.0,    # weight on the semantic MSE half (RGB half is 1.0)
     ):
         super().__init__()
-        # Load models
+        # Load models. If distill_lora_path is set, the distill LoRA is merged
+        # into the base DiT BEFORE any expansion/freezing. This is critical to
+        # avoid a train/eval regime mismatch — inference uses the 4-step distill
+        # LoRA, so training must too, or the semantic head learns behavior that
+        # gets scrambled by the distilled sampler at inference.
         self.pipe = WanVideoNeoVersePipeline.from_pretrained(
             local_model_path=model_path,
             reconstructor_path=reconstructor_path,
             pipeline_kwargs=pipeline_kwargs,
+            lora_path=distill_lora_path,
+            lora_alpha=distill_lora_alpha,
             device="cpu",
             torch_dtype=torch.bfloat16,
         )
 
         # SEMANTIC FINETUNE: expand DiT + control branch to co-denoise semantics.
-        # MUST happen AFTER loading pretrained weights but BEFORE any freezing / LoRA.
-        # Zero-init on new channels -> step 0 behavior matches pretrained RGB model.
+        # MUST happen AFTER loading pretrained weights (and any distill LoRA merge)
+        # but BEFORE any freezing / LoRA. Zero-init on new channels -> step 0
+        # behavior matches pretrained RGB model.
+        #
+        # semantic_expansion_version:
+        #   1 = grow patch_embedding / head / control_patch_embedding IN PLACE
+        #       (v3/4/5 approach). New channels are extra rows/columns on the
+        #       existing weight tensors. If the RGB slice is trained via LoRA,
+        #       RGB can drift.
+        #   2 = add parallel `_sem` submodules alongside the pretrained ones.
+        #       Base modules are UNTOUCHED (RGB path is bit-identical to
+        #       pretrained until unfrozen). Semantic gets its own full-rank
+        #       weights. This is v6.
         if semantic_channels > 0:
-            from diffsynth.utils.semantics import (
-                expand_dit_for_semantics,
-                expand_control_branch_for_semantics,
-            )
-            self.pipe.semantic_channels = semantic_channels
-            expand_dit_for_semantics(self.pipe.dit, extra=semantic_channels)
-            if self.pipe.control_branch is not None:
-                expand_control_branch_for_semantics(self.pipe.control_branch, extra=semantic_channels)
+            if semantic_expansion_version == 1:
+                from diffsynth.utils.semantics import (
+                    expand_dit_for_semantics,
+                    expand_control_branch_for_semantics,
+                )
+                self.pipe.semantic_channels = semantic_channels
+                expand_dit_for_semantics(self.pipe.dit, extra=semantic_channels)
+                if self.pipe.control_branch is not None:
+                    expand_control_branch_for_semantics(self.pipe.control_branch, extra=semantic_channels)
+            elif semantic_expansion_version == 2:
+                from diffsynth.utils.semantics import (
+                    expand_dit_for_semantics_v2,
+                    expand_control_branch_for_semantics_v2,
+                )
+                self.pipe.semantic_channels = semantic_channels
+                expand_dit_for_semantics_v2(self.pipe.dit, extra=semantic_channels)
+                if self.pipe.control_branch is not None:
+                    expand_control_branch_for_semantics_v2(self.pipe.control_branch, extra=semantic_channels)
+            else:
+                raise ValueError(f"unknown semantic_expansion_version={semantic_expansion_version}")
+            # Loss weight for the semantic half of the 32-ch MSE. Default 4.0.
+            self.pipe.semantic_loss_weight = float(semantic_loss_weight)
 
         # Reset training scheduler
         self.pipe.scheduler.set_timesteps(1000, training=True)
@@ -65,7 +100,15 @@ class WanTrainingModule(DiffusionTrainingModule):
             )
             setattr(self.pipe, lora_base_model, model)
 
-        # Freeze untrainable models
+        # Freeze untrainable models.
+        # freeze_except only sets matched params to requires_grad=True; it does
+        # NOT explicitly freeze non-matched params in trainable models. For v6
+        # (surgical: only .sem submodules trainable in control_branch), we
+        # explicitly freeze all control_branch params first so freeze_except's
+        # regex only lights up the .sem ones.
+        if semantic_expansion_version == 2 and self.pipe.control_branch is not None:
+            for p in self.pipe.control_branch.parameters():
+                p.requires_grad = False
         self.pipe.freeze_except([] if trainable_models is None else trainable_models.split(","), lora_base_model)
 
         # Store other configs
@@ -142,6 +185,10 @@ if __name__ == "__main__":
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
         semantic_channels=int(getattr(args, "semantic_channels", 0)),
+        semantic_expansion_version=int(getattr(args, "semantic_expansion_version", 1)),
+        distill_lora_path=getattr(args, "distill_lora_path", None),
+        distill_lora_alpha=float(getattr(args, "distill_lora_alpha", 1.0)),
+        semantic_loss_weight=float(getattr(args, "semantic_loss_weight", 4.0)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
     # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for

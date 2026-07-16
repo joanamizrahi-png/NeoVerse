@@ -1,0 +1,110 @@
+# v6: full-rank semantic pathway via parallel _sem submodules + distill LoRA merged at train.
+#
+# Why v5 fell short (verified 2026-07-16):
+#   - v5 added patch_embedding + head.head to lora_target_modules with rank 32.
+#     Semantic base weights are zero-init frozen, so the LoRA delta was the ENTIRE
+#     semantic pathway -> effectively a rank-32 matrix from 16 semantic channels
+#     to dim (and dim back to 16 semantic output channels). Not enough capacity.
+#   - Also: v5 trained without the lightx2v 4-step distill LoRA, but was evaluated
+#     4-step at inference. Train/eval regime mismatch — new semantic modules
+#     never saw distilled sampling.
+#   - Symptom: semantic_raw pre-decolor decode was coarse blurry bands,
+#     not sharp class regions.
+#
+# v6 changes:
+#   1. semantic_expansion_version: 2 — parallel `_sem` submodules alongside the
+#      pretrained ones. patch_embedding.sem = full Conv3d(16, dim). head.head.sem
+#      = full Linear(dim, 16*p). control_patch_embedding.sem = full Conv3d(16, dim).
+#      RGB path stays bit-identical to pretrained until unfrozen.
+#   2. distill_lora_path — merge lightx2v distill LoRA into the base BEFORE any
+#      expansion/freezing/LoRA. Training then sees the same 4-step regime as
+#      inference. Same regime as future RL rollouts.
+#   3. No v3 warm-start. v3's control_branch was trained on the pre-priority-order
+#      labels; since v6 freezes control_branch base, that staleness would be baked
+#      in permanently. Base pretrained RGB is already high quality — we don't
+#      need v3's drifted RGB.
+#   4. trainable_models targets the new .sem submodules only. Everything else
+#      frozen.
+#   5. Small LoRA (rank 16) on q,k,v,o,ffn for semantic routing capacity —
+#      starts at zero so RGB baseline preserved at t=0.
+#   6. rgb_loss weight = 1.0 (anchor: attention LoRA can drift RGB slightly,
+#      the term keeps it honest). sem_weight = 2.0 (down from v5's 4.0).
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2   # NEW: 1 = v3/4/5 in-place grow, 2 = v6 parallel _sem
+
+# Down from v5's 4.0. RGB anchor (weight 1.0) has more headroom now.
+semantic_loss_weight: 2.0
+
+# Merge lightx2v 4-step distill LoRA into the base DiT at pipeline load.
+# This is what inference does. Training must match or the finetune learns
+# behavior that gets scrambled at 4-step eval.
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/combined_train_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# Train ONLY the new _sem submodules. All RGB pathways stay bit-identical to
+# base pretrained (plus the small attention LoRA below).
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem"
+
+# Rank-16 LoRA on attention/FFN gives the semantic pathway a way to ROUTE
+# information through the frozen transformer. Starts at zero, so RGB path is
+# still preserved at t=0. rgb_loss=1.0 anchors it.
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 16
+
+# Fresh start from base pretrained (+ distill merged above). No v3 warm-start:
+# v3 has stale-label patterns in control_branch we'd bake in permanently.
+pretrained_path: null
+
+learning_rate: 1e-4
+num_epochs: 20
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v6
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v6_sem_split_distill_regime
+wandb_mode: online
+
+debug_save_root: null

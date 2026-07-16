@@ -153,3 +153,229 @@ def expand_control_branch_for_semantics(control_branch, extra: int = 16):
 
     control_branch.control_patch_embedding = new
     return control_branch
+
+
+# ---------------------------------------------------------------------------
+# v2 expansion: parallel `_sem` submodules for true RGB/semantic decoupling.
+#
+# Motivation: v5's approach (grow the module + rank-32 LoRA on top) meant the
+# semantic pathway was rank-limited AND the RGB slice of head/patch_embed could
+# drift via the LoRA delta. Semantic output ended up as coarse blobs, not sharp
+# class regions.
+#
+# v2 wraps the pretrained patch_embedding / head / control_patch_embedding in
+# a Module that runs the pretrained ("base") layer on the RGB slice of the
+# input and a NEW zero-init ("sem") layer of the same shape on the semantic
+# slice. Their outputs are summed for the input side, or interleaved into
+# channel-innermost layout for the head side. Semantic channels get FULL-RANK
+# 16 -> dim (and dim -> 16*p) capacity, and the RGB path stays bit-identical
+# to the pretrained weights unless someone unfreezes it.
+#
+# What to freeze in the v6 config:
+#   trainable: dit.patch_embedding.sem, dit.head.head.sem,
+#              control_branch.control_patch_embedding.sem
+#   frozen (plus a small LoRA on q/k/v/o/ffn for semantic routing capacity):
+#              everything else
+# ---------------------------------------------------------------------------
+
+
+class SplitPatchEmbedding(torch.nn.Module):
+    """Wraps the pretrained input Conv3d + a zero-init parallel Conv3d for semantics.
+
+    Forward takes a (B, base_ch + sem_ch, T, H, W) latent, feeds the first
+    `base_ch` channels through the base layer, feeds the next `sem_ch` channels
+    through the sem layer, and returns the sum. At init the sem branch is zero,
+    so hidden-state == base_layer(rgb_slice) — bit-identical to the pretrained
+    forward on the pretrained-only input.
+    """
+    def __init__(self, base: torch.nn.Conv3d, sem: torch.nn.Conv3d):
+        super().__init__()
+        self.base = base
+        self.sem = sem
+        self.base_ch = base.in_channels
+        self.sem_ch = sem.in_channels
+
+    def forward(self, x):
+        base_out = self.base(x[:, :self.base_ch])
+        sem_out = self.sem(x[:, self.base_ch:self.base_ch + self.sem_ch])
+        return base_out + sem_out
+
+    # Expose Conv3d-like attrs that other code inspects.
+    @property
+    def weight(self):
+        return self.base.weight
+
+    @property
+    def in_channels(self):
+        return self.base_ch + self.sem_ch
+
+    @property
+    def out_channels(self):
+        return self.base.out_channels
+
+    @property
+    def kernel_size(self):
+        return self.base.kernel_size
+
+    @property
+    def stride(self):
+        return self.base.stride
+
+
+class SplitHead(torch.nn.Module):
+    """Wraps the pretrained output Linear + a zero-init parallel Linear for semantics.
+
+    The DiT head's flat output layout is (patch_pos, channel) with channel
+    INNERMOST (unpatchify reshapes as `b (f h w) (x y z c)` -> `b c ...`).
+    We reshape each branch's output to [B, N, p, ch], concat on the channel
+    axis so base fills c=0..base_ch-1 and sem fills c=base_ch..base_ch+sem_ch-1,
+    then flatten back. At init sem is zero => RGB rows bit-identical to base
+    output.
+    """
+    def __init__(self, base: torch.nn.Linear, sem: torch.nn.Linear, patch_size_prod: int):
+        super().__init__()
+        self.base = base
+        self.sem = sem
+        self.p = patch_size_prod
+        self.base_ch = base.out_features // patch_size_prod
+        self.sem_ch = sem.out_features // patch_size_prod
+        assert self.base_ch * patch_size_prod == base.out_features, \
+            f"base head out_features {base.out_features} not divisible by p={patch_size_prod}"
+        assert self.sem_ch * patch_size_prod == sem.out_features, \
+            f"sem head out_features {sem.out_features} not divisible by p={patch_size_prod}"
+
+    def forward(self, x):
+        # x: [B, N, dim]
+        base_flat = self.base(x)                                     # [B, N, base_ch * p]
+        sem_flat = self.sem(x)                                       # [B, N, sem_ch * p]
+        B, N, _ = base_flat.shape
+        base_r = base_flat.view(B, N, self.p, self.base_ch)          # [B, N, p, base_ch]
+        sem_r = sem_flat.view(B, N, self.p, self.sem_ch)             # [B, N, p, sem_ch]
+        combined = torch.cat([base_r, sem_r], dim=-1)                # [B, N, p, base_ch+sem_ch]
+        return combined.view(B, N, self.p * (self.base_ch + self.sem_ch))
+
+    # Expose Linear-like attrs.
+    @property
+    def weight(self):
+        return self.base.weight
+
+    @property
+    def in_features(self):
+        return self.base.in_features
+
+    @property
+    def out_features(self):
+        return (self.base_ch + self.sem_ch) * self.p
+
+
+class SplitControlPatchEmbedding(torch.nn.Module):
+    """Wraps control_branch.control_patch_embedding for v6.
+
+    Input channel layout (same as v5's expanded form):
+        [RGB (16), depth (16), SEMANTIC (sem_ch), mask_cam (64)] = 96 + sem_ch
+    Base layer processes the 96 non-semantic channels: RGB, depth, mask_cam.
+    Sem layer processes just the SEMANTIC slice (sem_ch channels).
+    Outputs summed.
+
+    Base is the pretrained Conv3d(96, dim); sem is a new zero-init Conv3d(sem_ch, dim).
+    RGB hint at init == pretrained control_branch output.
+    """
+    def __init__(self, base: torch.nn.Conv3d, sem: torch.nn.Conv3d,
+                 sem_start: int = 32, sem_ch: int = 16):
+        super().__init__()
+        self.base = base
+        self.sem = sem
+        self.sem_start = sem_start
+        self.sem_ch = sem_ch
+
+    def forward(self, x):
+        # x: [B, 96+sem_ch, T, H, W]. Slice out semantic; concat the rest for base.
+        sem_x = x[:, self.sem_start:self.sem_start + self.sem_ch]
+        base_x = torch.cat(
+            [x[:, :self.sem_start], x[:, self.sem_start + self.sem_ch:]],
+            dim=1,
+        )
+        return self.base(base_x) + self.sem(sem_x)
+
+    @property
+    def weight(self):
+        return self.base.weight
+
+    @property
+    def in_channels(self):
+        return self.base.in_channels + self.sem_ch
+
+    @property
+    def out_channels(self):
+        return self.base.out_channels
+
+    @property
+    def kernel_size(self):
+        return self.base.kernel_size
+
+    @property
+    def stride(self):
+        return self.base.stride
+
+
+@torch.no_grad()
+def expand_dit_for_semantics_v2(dit, extra: int = 16):
+    """v6 expansion. Adds parallel zero-init `_sem` submodules on patch_embedding
+    and head.head. Pretrained modules are left as-is; RGB path is bit-identical
+    to pretrained until someone unfreezes it.
+
+    After this call:
+        dit.patch_embedding      -- SplitPatchEmbedding(base=Conv3d(16,dim), sem=Conv3d(extra,dim))
+                                    trainable path: dit.patch_embedding.sem
+        dit.head.head            -- SplitHead(base=Linear(dim,16*p),
+                                              sem=Linear(dim,extra*p))
+                                    trainable path: dit.head.head.sem
+
+    Call ONCE after loading pretrained DiT, before freeze/LoRA setup.
+    """
+    dev, dt = dit.patch_embedding.weight.device, dit.patch_embedding.weight.dtype
+
+    base_pe = dit.patch_embedding
+    sem_pe = torch.nn.Conv3d(
+        extra, base_pe.out_channels,
+        kernel_size=base_pe.kernel_size, stride=base_pe.stride,
+    ).to(dev, dt)
+    sem_pe.weight.data.zero_()
+    if sem_pe.bias is not None:
+        sem_pe.bias.data.zero_()
+    dit.patch_embedding = SplitPatchEmbedding(base=base_pe, sem=sem_pe)
+
+    p = int(math.prod(dit.patch_size))
+    base_head = dit.head.head
+    dim = base_head.in_features
+    sem_head = torch.nn.Linear(dim, extra * p, bias=base_head.bias is not None).to(dev, dt)
+    sem_head.weight.data.zero_()
+    if sem_head.bias is not None:
+        sem_head.bias.data.zero_()
+    dit.head.head = SplitHead(base=base_head, sem=sem_head, patch_size_prod=p)
+    return dit
+
+
+@torch.no_grad()
+def expand_control_branch_for_semantics_v2(control_branch, extra: int = 16):
+    """v6 expansion for control_branch. Adds a parallel zero-init Conv3d that
+    consumes just the semantic slice of the input tensor. Base Conv3d(96, dim)
+    is unchanged and continues to process RGB+depth+mask_cam.
+
+    Input tensor layout is unchanged from v5:
+        [RGB (16), depth (16), SEMANTIC (extra), mask_cam (64)] = 96 + extra
+
+    trainable path: control_branch.control_patch_embedding.sem
+    """
+    base_cpe = control_branch.control_patch_embedding
+    sem_cpe = torch.nn.Conv3d(
+        extra, base_cpe.out_channels,
+        kernel_size=base_cpe.kernel_size, stride=base_cpe.stride,
+    ).to(base_cpe.weight.device, base_cpe.weight.dtype)
+    sem_cpe.weight.data.zero_()
+    if sem_cpe.bias is not None:
+        sem_cpe.bias.data.zero_()
+    control_branch.control_patch_embedding = SplitControlPatchEmbedding(
+        base=base_cpe, sem=sem_cpe, sem_start=32, sem_ch=extra,
+    )
+    return control_branch

@@ -213,6 +213,9 @@ def semantic_inference(
     alpha_threshold: float = 1.0,
     static_scene: bool = False,
     semantic_channels: int = 16,
+    semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
+    lora_rank: int = 32,                   # match training config's lora_rank
+    lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     semantic_labels: "np.ndarray | None" = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
@@ -236,15 +239,27 @@ def semantic_inference(
     # ---- 2. Semantic expansion (MUST match training-time expansion) ----
     if not disable_semantic_channels:
         pipe.semantic_channels = semantic_channels
-        expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
-        if pipe.control_branch is not None:
-            expand_control_branch_for_semantics(pipe.control_branch, extra=semantic_channels)
-        print(f"Applied semantic expansion (+{semantic_channels} latent channels)", flush=True)
+        if semantic_expansion_version == 1:
+            expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
+            if pipe.control_branch is not None:
+                expand_control_branch_for_semantics(pipe.control_branch, extra=semantic_channels)
+        elif semantic_expansion_version == 2:
+            from diffsynth.utils.semantics import (
+                expand_dit_for_semantics_v2,
+                expand_control_branch_for_semantics_v2,
+            )
+            expand_dit_for_semantics_v2(pipe.dit, extra=semantic_channels)
+            if pipe.control_branch is not None:
+                expand_control_branch_for_semantics_v2(pipe.control_branch, extra=semantic_channels)
+        else:
+            raise ValueError(f"unknown semantic_expansion_version={semantic_expansion_version}")
+        print(f"Applied semantic expansion v{semantic_expansion_version} (+{semantic_channels} latent channels)", flush=True)
 
     # ---- 2b. Inject LoRA on DiT to match training. Must happen BEFORE checkpoint load
     # or the LoRA weights get discarded as unexpected keys.
-    _inject_lora_for_finetune(pipe, rank=32)
-    print("Injected LoRA slots on DiT (rank 32)", flush=True)
+    _inject_lora_for_finetune(pipe, rank=lora_rank, target_modules=lora_target_modules)
+    print(f"Injected LoRA slots on DiT (rank {lora_rank}, "
+          f"targets={lora_target_modules or 'default'})", flush=True)
 
     # ---- 3. Load finetune weights ----
     _load_finetune_checkpoint(pipe, checkpoint)
@@ -464,6 +479,16 @@ def parse_args():
     p.add_argument("--static_scene", action="store_true")
     p.add_argument("--semantic_channels", type=int, default=16,
                    help="Must match training-time value")
+    p.add_argument("--semantic_expansion_version", type=int, default=1, choices=[1, 2],
+                   help="Must match training-time value. 1 = v3/4/5 in-place grow. "
+                        "2 = v6 parallel _sem submodules.")
+    p.add_argument("--lora_rank", type=int, default=32,
+                   help="Must match training-time lora_rank")
+    p.add_argument("--lora_target_modules", default=None,
+                   help="Comma-separated. Must match training-time list. "
+                        "Default (None) = q,k,v,o,ffn.0,ffn.2,patch_embedding,head.head "
+                        "(v5 default). For v6 pass 'q,k,v,o,ffn.0,ffn.2' since patch_embedding "
+                        "and head.head are full-trainable sub-modules there, not LoRA'd.")
     p.add_argument("--semantic_labels", default=None,
                    help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
                         "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
@@ -504,6 +529,10 @@ def main():
         use_lora=not args.disable_lora,
         static_scene=args.static_scene,
         semantic_channels=args.semantic_channels,
+        semantic_expansion_version=args.semantic_expansion_version,
+        lora_rank=args.lora_rank,
+        lora_target_modules=(args.lora_target_modules.split(",")
+                             if args.lora_target_modules else None),
         semantic_labels=semantic_labels,
     )
 
