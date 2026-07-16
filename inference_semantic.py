@@ -57,12 +57,19 @@ from diffsynth.utils.semantics import (
 def _inject_lora_for_finetune(pipe, rank: int = 32, target_modules=None):
     """Inject peft LoRA slots into DiT to match training-time injection.
 
-    Training used lora_base_model="dit", target_modules="q,k,v,o,ffn.0,ffn.2",
-    rank=32. Without this, the checkpoint's `blocks.*.self_attn.q.lora_A.default.weight`
-    keys are unexpected and get silently dropped -- the finetune is effectively unloaded.
+    IMPORTANT: this list MUST match `lora_target_modules` in the training yaml.
+    v5 used q,k,v,o,ffn.0,ffn.2,patch_embedding,head.head. If a target that was
+    trained is missing here, its LoRA tensors are silently discarded at
+    _load_finetune_checkpoint (strict=False) -- and for patch_embedding /
+    head.head specifically, whose semantic-slot base weights are zero-init and
+    frozen, that means the ENTIRE semantic pathway is amputated at inference.
+    That's exactly why v5 outputs looked like palette noise. If we ever add
+    more target modules to training, update this list. The assertion below
+    turns silent failure into a hard failure.
     """
     if target_modules is None:
-        target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2"]
+        target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2",
+                          "patch_embedding", "head.head"]
     lora_config = LoraConfig(r=rank, lora_alpha=rank, target_modules=target_modules)
     pipe.dit = inject_adapter_in_model(lora_config, pipe.dit)
 
@@ -102,7 +109,14 @@ def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) ->
             f"{len(missing)} missing, {len(unexpected)} unexpected"
         )
         if unexpected:
-            print(f"    first unexpected: {unexpected[0]}")
+            # Hard fail: silent unexpected keys are how we lost v5's semantic
+            # pathway. If this ever fires, add the training-time module to
+            # _inject_lora_for_finetune's target list.
+            raise RuntimeError(
+                f"{name}: {len(unexpected)} unexpected keys — first: "
+                f"{unexpected[0]}. Update _inject_lora_for_finetune's "
+                f"target_modules to match training config."
+            )
 
 
 def _make_dual_decode(orig_decode, sink: dict):
