@@ -216,6 +216,7 @@ def semantic_inference(
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
+    zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
     semantic_labels: "np.ndarray | None" = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
@@ -263,6 +264,23 @@ def semantic_inference(
 
     # ---- 3. Load finetune weights ----
     _load_finetune_checkpoint(pipe, checkpoint)
+
+    # ---- 3b. Optional diagnostic: zero the trunk LoRA (--zero_trunk_lora) ----
+    # Hypothesis test for the v6 mottle: the shared attention/FFN LoRA is the ONLY
+    # trained component that touches the RGB path (I/O layers + control branch
+    # base are frozen). Zeroing lora_B reverts the trunk to the pristine merged
+    # base while KEEPING the full-rank _sem I/O modules and control sem conv.
+    #   -> RGB clean + semantic still structured  = drop/tame trunk LoRA (v8)
+    #   -> RGB clean + semantic collapses         = trunk routing is needed; tune
+    #      its LR/rank instead of removing it.
+    if zero_trunk_lora:
+        n_zeroed = 0
+        with torch.no_grad():
+            for name, param in pipe.dit.named_parameters():
+                if "lora_B" in name:
+                    param.zero_()
+                    n_zeroed += 1
+        print(f"[zero_trunk_lora] zeroed {n_zeroed} lora_B tensors — trunk = pristine base", flush=True)
 
     # ---- 4. Load input video ----
     print(f"Loading input video: {input_path}", flush=True)
@@ -484,6 +502,9 @@ def parse_args():
                         "2 = v6 parallel _sem submodules.")
     p.add_argument("--lora_rank", type=int, default=32,
                    help="Must match training-time lora_rank")
+    p.add_argument("--zero_trunk_lora", action="store_true",
+                   help="Diagnostic: zero the attention/FFN LoRA after checkpoint load. "
+                        "Isolates trunk-LoRA drift as the mottle source (see 3b comment).")
     p.add_argument("--lora_target_modules", default=None,
                    help="Comma-separated. Must match training-time list. "
                         "Default (None) = q,k,v,o,ffn.0,ffn.2,patch_embedding,head.head "
@@ -533,6 +554,7 @@ def main():
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),
+        zero_trunk_lora=args.zero_trunk_lora,
         semantic_labels=semantic_labels,
     )
 
