@@ -25,7 +25,7 @@ def VideoReader_contextmanager(*args, **kwargs):
 
 
 class SpatialVID(BaseDataset):
-    def __init__(self, ROOT, labels_dir=None, *args, **kwargs):
+    def __init__(self, ROOT, labels_dir=None, target_labels_dir=None, *args, **kwargs):
         """
         Args:
             ROOT: SpatialVID root directory.
@@ -33,9 +33,15 @@ class SpatialVID(BaseDataset):
                 files, named "<scene_id>.npz" with a "labels" array of shape
                 [N_total_frames, H, W] int8 that matches the raw video's frame count.
                 If None, no labels are loaded and normal RGB training proceeds unchanged.
+            target_labels_dir: (v7, Option B) directory with per-clip DENSE ground-truth
+                label npz (same format; from prepare_rugd_gt_labels.py). When a clip has
+                one, it becomes the CLEAN training target (view["target_labels"]) while
+                the SAM3 labels above stay the hint attached to the Gaussians. Clips
+                without a GT npz fall back to SAM3 as target (hybrid).
         """
         self.ROOT = ROOT
         self.labels_dir = labels_dir
+        self.target_labels_dir = target_labels_dir
         super().__init__(*args, **kwargs)
         self.loaded_data = self._load_data()
 
@@ -85,6 +91,16 @@ class SpatialVID(BaseDataset):
                 safe_index = np.minimum(sample_index, len(all_labels) - 1)
                 per_frame_labels = all_labels[safe_index]   # [num_views, H, W]
 
+        # v7 (Option B): dense GT target labels, same indexing as the SAM3 hint.
+        per_frame_target_labels = None
+        if self.target_labels_dir is not None:
+            gt_path = osp.join(self.target_labels_dir, f"{scene_info['id']}.npz")
+            if osp.exists(gt_path):
+                with np.load(gt_path) as d:
+                    all_gt = d["labels"]
+                safe_index = np.minimum(sample_index, len(all_gt) - 1)
+                per_frame_target_labels = all_gt[safe_index]   # [num_views, H, W]
+
         context_views = []
         target_views = []
         for v, rgb_image in enumerate(images):
@@ -109,6 +125,8 @@ class SpatialVID(BaseDataset):
                 # Cast int8 -> int32 so base_dataset.is_good_type accepts it (allowed dtypes
                 # are float32/bool/int32/int64/uint8). int32 is plenty for our 30 classes.
                 view["labels"] = per_frame_labels[v].astype(np.int32)
+            if per_frame_target_labels is not None:
+                view["target_labels"] = per_frame_target_labels[v].astype(np.int32)
             if view["is_target"]:
                 target_views.append(view)
             else:

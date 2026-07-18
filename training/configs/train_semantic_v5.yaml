@@ -85,7 +85,7 @@ start_epoch: 0
 resume_step: null
 
 wandb_project: neoverse-semantic
-wandb_run_name: v5_lora_on_head_warmstart_v3
+wandb_run_name: v5_lora_on_head_from_scratch
 wandb_mode: online
 
 debug_save_root: null

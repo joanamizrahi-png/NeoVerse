@@ -451,9 +451,13 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         # This is the CLEAN target consumed by WanVideoUnit_InputVideoEmbedder (colorize +
         # VAE-encode -> channel-concat with RGB latent). Labels arrive as np.ndarray from
         # compose_batches_from_list; convert to tensor for the sort + downstream ops.
+        # v7 (Option B): if the dataloader attached dense GT labels ("target_labels",
+        # from RUGD annotations), THEY are the clean training target; SAM3 "labels"
+        # stay the hint on the Gaussians. Clips without GT fall back to SAM3 (hybrid).
         semantic_labels = None
-        if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and "labels" in source_views:
-            labels = source_views["labels"]
+        target_key = "target_labels" if "target_labels" in source_views else "labels"
+        if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and target_key in source_views:
+            labels = source_views[target_key]
             if isinstance(labels, np.ndarray):
                 labels = torch.from_numpy(labels)
             semantic_labels = labels.clone()
