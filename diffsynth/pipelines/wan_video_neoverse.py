@@ -100,7 +100,19 @@ class WanVideoNeoVersePipeline(BasePipeline):
         C = pred_f.shape[1]
         if C > 16:
             rgb_l = torch.nn.functional.mse_loss(pred_f[:, :16], tgt_f[:, :16])
-            sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:])
+            if getattr(self, "semantic_x0_prediction", False):
+                # v8 (U1): the semantic half of the network output IS the clean
+                # latent (x0-prediction), scored against the clean input latents.
+                # Noise-target regression on label maps fails to guide
+                # segmentation (arxiv 2601.02881, 2412.02929); the RGB half
+                # keeps velocity-prediction (distill-matched, works).
+                # Inference must convert sem channels x0 -> velocity (see the
+                # denoise loop) — checkpoints trained with this flag are
+                # incompatible with plain-velocity inference.
+                sem_l = torch.nn.functional.mse_loss(
+                    pred_f[:, 16:], inputs["input_latents"].float()[:, 16:])
+            else:
+                sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:])
             loss = (rgb_l + SEM_WEIGHT * sem_l) * w
             # Stash pre-weight split values for wandb observability (comparable to
             # the RGB-side and unweighted-semantic components of `loss`).
@@ -395,6 +407,17 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
             else:
                 noise_pred = noise_pred_posi
+
+            # v8 x0-prediction: the semantic half of the model output is the
+            # clean latent, not velocity. Convert to velocity so the shared
+            # scheduler step stays uniform: v = (x_t - x0_pred) / sigma.
+            # At the final step this lands EXACTLY on x0_pred (prev = x - v*sigma).
+            if getattr(self, "semantic_x0_prediction", False) and noise_pred.shape[1] > 16:
+                sigma = float(self.scheduler.sigmas[progress_id])
+                lat_sem = inputs_shared["latents"][:, 16:].float()
+                v_sem = (lat_sem - noise_pred[:, 16:].float()) / max(sigma, 1e-4)
+                noise_pred = torch.cat(
+                    [noise_pred[:, :16], v_sem.to(noise_pred.dtype)], dim=1)
 
             # Scheduler
             inputs_shared["latents"] = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], inputs_shared["latents"])

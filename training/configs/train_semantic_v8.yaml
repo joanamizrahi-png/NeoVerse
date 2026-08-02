@@ -1,0 +1,86 @@
+# v8-core, stage 1 (Change 1 / U1 only): x0-prediction for the semantic half.
+#
+# v7 verdict: dense GT targets gave clean regions + correct classes; residual
+# boundary speckle remains. Literature diagnosis (docs/SEMANTIC_V8_RESEARCH.md):
+# noise/velocity-target regression on label maps "fails to guide" segmentation
+# (arxiv 2601.02881, 2412.02929). Fix here: the DiT's semantic output channels
+# are trained to predict the CLEAN semantic latent (x0) directly; inference
+# converts x0 -> velocity per step (see wan_video_neoverse.py denoise loop).
+#
+# Everything else is v7 verbatim — one attributable change per run.
+# Changes 2 (decoded-space CE) and 3 (SAM2 homogeneity loss) stack on top in
+# stage 2/3 configs once this one's smoke test reads clean.
+#
+# EVAL GOTCHA: v8 checkpoints REQUIRE inference_semantic.py
+#   --semantic_x0_prediction  (plus the usual --semantic_expansion_version 2
+#   --lora_rank 8). Running a v8 ckpt with plain velocity inference produces
+#   garbage semantics by construction; v6/v7 ckpts must keep the flag OFF.
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2
+semantic_x0_prediction: true    # <-- THE v8 stage-1 change
+
+semantic_loss_weight: 2.0
+
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/combined_train_data", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels", target_labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/rugd_gt_labels", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem"
+
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 8
+
+pretrained_path: null
+
+learning_rate: 1e-4
+num_epochs: 30
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v8
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v8_x0_prediction
+wandb_mode: online
+
+debug_save_root: null

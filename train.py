@@ -27,6 +27,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         distill_lora_path: str = None,        # v6: merge lightx2v distill LoRA at TRAIN time
         distill_lora_alpha: float = 1.0,      # so train + eval share the same 4-step regime
         semantic_loss_weight: float = 4.0,    # weight on the semantic MSE half (RGB half is 1.0)
+        semantic_x0_prediction: bool = False,  # v8: sem half predicts the clean latent (x0), not velocity
     ):
         super().__init__()
         # Load models. If distill_lora_path is set, the distill LoRA is merged
@@ -81,6 +82,7 @@ class WanTrainingModule(DiffusionTrainingModule):
                 raise ValueError(f"unknown semantic_expansion_version={semantic_expansion_version}")
             # Loss weight for the semantic half of the 32-ch MSE. Default 4.0.
             self.pipe.semantic_loss_weight = float(semantic_loss_weight)
+            self.pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
 
         # Reset training scheduler
         self.pipe.scheduler.set_timesteps(1000, training=True)
@@ -189,6 +191,7 @@ if __name__ == "__main__":
         distill_lora_path=getattr(args, "distill_lora_path", None),
         distill_lora_alpha=float(getattr(args, "distill_lora_alpha", 1.0)),
         semantic_loss_weight=float(getattr(args, "semantic_loss_weight", 4.0)),
+        semantic_x0_prediction=bool(getattr(args, "semantic_x0_prediction", False)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
     # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for

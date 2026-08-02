@@ -214,6 +214,7 @@ def semantic_inference(
     static_scene: bool = False,
     semantic_channels: int = 16,
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
+    semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
@@ -240,6 +241,7 @@ def semantic_inference(
     # ---- 2. Semantic expansion (MUST match training-time expansion) ----
     if not disable_semantic_channels:
         pipe.semantic_channels = semantic_channels
+        pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
         if semantic_expansion_version == 1:
             expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
             if pipe.control_branch is not None:
