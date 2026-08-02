@@ -379,3 +379,28 @@ def expand_control_branch_for_semantics_v2(control_branch, extra: int = 16):
         base=base_cpe, sem=sem_cpe, sem_start=32, sem_ch=extra,
     )
     return control_branch
+
+
+class SemanticClassHead(torch.nn.Module):
+    """v8 Change 2: reads per-pixel class logits off the VAE-DECODED semantic
+    output (the colorized map, full resolution). Used two ways:
+      - training: decoded-space cross-entropy — the loss that finally asks
+        "is this pixel the right class?" at the pixel scale where speckle lives
+      - inference (optional): replaces nearest-palette decoding
+
+    Class-count agnostic: num_classes is a constructor arg; checkpoints carry
+    it in the final conv's shape (see inference auto-instantiation).
+    """
+
+    def __init__(self, num_classes: int = 30, hidden: int = 64):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Conv2d(3, hidden, 3, padding=1), torch.nn.ReLU(),
+            torch.nn.Conv2d(hidden, hidden, 3, padding=1), torch.nn.ReLU(),
+            torch.nn.Conv2d(hidden, num_classes, 1),
+        )
+
+    def forward(self, x):
+        # x: [N, 3, H, W] decoded colorized frames in [-1, 1]; cast to our own
+        # param dtype (the head may be fp32 while the pipe runs bf16).
+        return self.net(x.to(next(self.parameters()).dtype))

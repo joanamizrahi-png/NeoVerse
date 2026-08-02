@@ -124,6 +124,33 @@ class WanVideoNeoVersePipeline(BasePipeline):
             loss = torch.nn.functional.mse_loss(pred_f, tgt_f) * w
             self._last_split_loss = None
 
+        # v8 Change 2: decoded-space cross-entropy on the semantic half.
+        # Only meaningful under x0-prediction (the sem output IS a clean-latent
+        # guess) and only at low-noise timesteps (elsewhere the guess is too
+        # blurry to be worth a VAE decode). Decodes a short PREFIX of latent
+        # frames (causal video VAE -> prefix decode is valid) to bound memory.
+        CE_W = float(getattr(self, "semantic_ce_weight", 0.0))
+        head = getattr(self, "semantic_class_head", None)
+        sem_labels = inputs.get("semantic_labels", None)
+        if (CE_W > 0.0 and head is not None and C > 16 and sem_labels is not None
+                and getattr(self, "semantic_x0_prediction", False)):
+            t_id = torch.argmin((self.scheduler.timesteps.to(timestep.device)
+                                 - timestep).abs())
+            sigma = float(self.scheduler.sigmas[t_id])
+            if sigma <= float(getattr(self, "semantic_ce_sigma_max", 0.7)):
+                n_lat = int(getattr(self, "semantic_ce_latent_frames", 2))
+                x0_sem = noise_pred[:, 16:, :n_lat]           # [B,16,n,h,w]
+                decoded = self.vae.decode(x0_sem, device=self.device)  # [B,3,T,H,W]
+                n_vid = decoded.shape[2]
+                frames = decoded.permute(0, 2, 1, 3, 4).flatten(0, 1)  # [B*T,3,H,W]
+                logits = head(frames).float()
+                gt = sem_labels[:, :n_vid].reshape(-1, *sem_labels.shape[-2:])
+                ce = torch.nn.functional.cross_entropy(
+                    logits, gt.long().to(logits.device))
+                loss = loss + CE_W * ce
+                if self._last_split_loss is not None:
+                    self._last_split_loss["semantic_ce"] = float(ce.detach())
+
         return loss
 
 

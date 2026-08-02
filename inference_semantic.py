@@ -94,6 +94,19 @@ def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) ->
         top, rest = key.split(".", 1)
         by_module.setdefault(top, {})[rest] = val
 
+    # v8 Change 2: stage-2+ checkpoints carry the decoded-space CE head. It
+    # doesn't exist on a freshly-built pipe — instantiate it from the
+    # checkpoint's own shape (final conv out-channels = num_classes) so the
+    # loader below doesn't silently skip it (the v5 trap, again).
+    if "semantic_class_head" in by_module and getattr(pipe, "semantic_class_head", None) is None:
+        from diffsynth.utils.semantics import SemanticClassHead
+        head_state = by_module["semantic_class_head"]
+        final_w = head_state["net.4.weight"]          # [num_classes, hidden, 1, 1]
+        pipe.semantic_class_head = SemanticClassHead(
+            num_classes=final_w.shape[0], hidden=final_w.shape[1]
+        ).to(final_w.dtype)
+        print(f"  instantiated semantic_class_head (num_classes={final_w.shape[0]})")
+
     for name, submodule_state in by_module.items():
         target = getattr(pipe, name, None)
         if target is None or not hasattr(target, "load_state_dict"):

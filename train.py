@@ -28,6 +28,10 @@ class WanTrainingModule(DiffusionTrainingModule):
         distill_lora_alpha: float = 1.0,      # so train + eval share the same 4-step regime
         semantic_loss_weight: float = 4.0,    # weight on the semantic MSE half (RGB half is 1.0)
         semantic_x0_prediction: bool = False,  # v8: sem half predicts the clean latent (x0), not velocity
+        semantic_ce_weight: float = 0.0,       # v8 Change 2: decoded-space CE weight (0 = off)
+        semantic_ce_sigma_max: float = 0.7,    # apply CE only at timesteps with sigma below this
+        semantic_ce_latent_frames: int = 2,    # latent frames to VAE-decode for CE (memory bound)
+        num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
     ):
         super().__init__()
         # Load models. If distill_lora_path is set, the distill LoRA is merged
@@ -83,6 +87,18 @@ class WanTrainingModule(DiffusionTrainingModule):
             # Loss weight for the semantic half of the 32-ch MSE. Default 4.0.
             self.pipe.semantic_loss_weight = float(semantic_loss_weight)
             self.pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+            # v8 Change 2: decoded-space CE. The head must exist BEFORE
+            # freeze_except so `semantic_class_head` in trainable_models can
+            # unfreeze it; requires x0-prediction (it reads the clean-latent guess).
+            self.pipe.semantic_ce_weight = float(semantic_ce_weight)
+            self.pipe.semantic_ce_sigma_max = float(semantic_ce_sigma_max)
+            self.pipe.semantic_ce_latent_frames = int(semantic_ce_latent_frames)
+            if semantic_ce_weight > 0.0:
+                assert semantic_x0_prediction, \
+                    "semantic_ce_weight requires semantic_x0_prediction: true"
+                from diffsynth.utils.semantics import SemanticClassHead
+                self.pipe.semantic_class_head = SemanticClassHead(
+                    num_classes=int(num_semantic_classes))
 
         # Reset training scheduler
         self.pipe.scheduler.set_timesteps(1000, training=True)
@@ -192,6 +208,10 @@ if __name__ == "__main__":
         distill_lora_alpha=float(getattr(args, "distill_lora_alpha", 1.0)),
         semantic_loss_weight=float(getattr(args, "semantic_loss_weight", 4.0)),
         semantic_x0_prediction=bool(getattr(args, "semantic_x0_prediction", False)),
+        semantic_ce_weight=float(getattr(args, "semantic_ce_weight", 0.0)),
+        semantic_ce_sigma_max=float(getattr(args, "semantic_ce_sigma_max", 0.7)),
+        semantic_ce_latent_frames=int(getattr(args, "semantic_ce_latent_frames", 2)),
+        num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
     # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for
