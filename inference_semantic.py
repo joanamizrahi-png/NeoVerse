@@ -517,6 +517,9 @@ def parse_args():
                         "2 = v6 parallel _sem submodules.")
     p.add_argument("--lora_rank", type=int, default=32,
                    help="Must match training-time lora_rank")
+    p.add_argument("--semantic_x0_prediction", action="store_true",
+                   help="Must match training: v8 checkpoints REQUIRE this "
+                        "(sem half outputs the clean latent); v6/v7 must omit it")
     p.add_argument("--zero_trunk_lora", action="store_true",
                    help="Diagnostic: zero the attention/FFN LoRA after checkpoint load. "
                         "Isolates trunk-LoRA drift as the mottle source (see 3b comment).")
@@ -566,6 +569,7 @@ def main():
         static_scene=args.static_scene,
         semantic_channels=args.semantic_channels,
         semantic_expansion_version=args.semantic_expansion_version,
+        semantic_x0_prediction=args.semantic_x0_prediction,
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),
