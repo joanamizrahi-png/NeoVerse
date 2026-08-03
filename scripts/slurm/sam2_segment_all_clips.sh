@@ -24,11 +24,20 @@ hash -r
 cd /scratch/m000204-pm06b/joana/NeoVerse
 echo "commit: $(git log --oneline -1)"
 
+# combined_train_data nests clips under subdirs (data/, SpatialVid/, train/) —
+# a flat glob finds nothing (job 406381's 80-second failure). Recursive find
+# works regardless of layout; clip stem must equal the dataloader's scene id,
+# which holds because the same mp4 basenames feed the SAM3 labeler.
 CLIPS_ROOT=/scratch/m000204-pm06b/joana/combined_train_data
+mapfile -t CLIPS < <(find "$CLIPS_ROOT" -name "*.mp4" | sort)
+echo "found ${#CLIPS[@]} clips under $CLIPS_ROOT"
+if [ "${#CLIPS[@]}" -eq 0 ]; then
+    echo "FATAL: no .mp4 under $CLIPS_ROOT"; exit 1
+fi
 N=0
-for CLIP_PATH in "$CLIPS_ROOT"/*.mp4; do
+for CLIP_PATH in "${CLIPS[@]}"; do
     N=$((N + 1))
-    echo "=== [$N] $(basename "$CLIP_PATH") ==="
+    echo "=== [$N/${#CLIPS[@]}] $(basename "$CLIP_PATH") ==="
     python sam2_precompute_segments.py --input_path "$CLIP_PATH"
 done
 
