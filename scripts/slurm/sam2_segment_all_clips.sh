@@ -19,6 +19,11 @@ set -euo pipefail
 module load conda/24.3.0-0
 export PATH=/users/jmizrahi/.conda/envs/sam3/bin:$PATH
 export PYTHONNOUSERSITE=1
+# Compute nodes have no internet AND the shell has a corrupt HF token (401s on
+# public repos). Offline mode makes transformers read the login-node-downloaded
+# cache and never attempt a request. PREREQ (once, login node):
+#   python -c "from huggingface_hub import snapshot_download; snapshot_download('facebook/sam2.1-hiera-large', token=False)"
+export HF_HUB_OFFLINE=1
 hash -r
 
 cd /scratch/m000204-pm06b/joana/NeoVerse
