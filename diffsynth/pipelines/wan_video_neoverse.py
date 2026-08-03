@@ -28,17 +28,22 @@ from ..models.wan_video_neoverse_controller import NeoVerseControlBranch
 from ..schedulers.flow_match import FlowMatchScheduler
 
 
-def _segment_homogeneity_loss(probs, seg, min_px: int = 400):
+def _segment_homogeneity_loss(probs, seg, gt=None, min_px: int = 0,
+                              critical_ids=(26, 27, 28, 29)):
     """v8 Change 3. probs [N,C,H,W] softmax class probs; seg [N,H,W] int
     segment ids (0 = unassigned, skipped). Per segment: mean class
     distribution over its pixels (detached) becomes each member pixel's soft
     CE target. Perfectly uniform segments cost ~0; disagreement (speckle)
     costs. Per-frame loop is fine: N is small (decoded CE prefix, ~5).
 
-    min_px: segments smaller than this contribute nothing. SAM2 produces
-    confetti on hard scenes (creek: unstable micro-fragments) — tiny segments
-    carry no real "belongs together" information, only noise. 400 px ~= a
-    20x20 patch at our 560x336 resolution."""
+    Small-segment filter, OFF by default (min_px=0: every segment counts).
+    Decision 2026-08-03: prove the confetti hurts before filtering it — the
+    low loss weight bounds any damage. If evidence later demands filtering,
+    set semantic_seg_min_px>0; the GT safety exemption below then keeps small
+    dynamic/safety-critical segments (person, vehicle...) in the loss, since
+    a size threshold cannot distinguish a distant pedestrian from noise.
+    critical_ids follow sam3_precompute_labels.CLASSES — revisit on class-set
+    change."""
     N, C, _, _ = probs.shape
     total = probs.new_zeros(())
     count = 0
@@ -53,7 +58,19 @@ def _segment_homogeneity_loss(probs, seg, min_px: int = 400):
         sums = probs.new_zeros(K + 1, C).index_add_(0, s_v, p_v)
         cnts = probs.new_zeros(K + 1).index_add_(
             0, s_v, torch.ones_like(s_v, dtype=probs.dtype))
-        keep = cnts[s_v] >= float(min_px)                   # per-pixel gate
+        keep_seg = cnts >= float(min_px)                    # [K+1] per segment
+        if gt is not None and len(critical_ids) > 0:
+            g_v = gt[n].reshape(-1)[valid].long()
+            n_gt = int(g_v.max()) + 1
+            hist = probs.new_zeros(K + 1, n_gt)
+            hist.index_put_((s_v, g_v), torch.ones_like(s_v, dtype=probs.dtype),
+                            accumulate=True)
+            majority = hist.argmax(dim=1)                   # [K+1] GT-majority class
+            crit = torch.zeros_like(keep_seg)
+            for cid in critical_ids:
+                crit |= majority == cid
+            keep_seg |= crit
+        keep = keep_seg[s_v]
         if not keep.any():
             continue
         mean = sums / cnts.clamp(min=1.0).unsqueeze(1)
@@ -199,8 +216,8 @@ class WanVideoNeoVersePipeline(BasePipeline):
                         -1, *segs.shape[-2:]).long().to(logits.device)
                     probs = torch.nn.functional.softmax(logits, dim=1)
                     seg_l = _segment_homogeneity_loss(
-                        probs, seg,
-                        min_px=int(getattr(self, "semantic_seg_min_px", 400)))
+                        probs, seg, gt=gt.reshape(-1, *segs.shape[-2:]).to(logits.device),
+                        min_px=int(getattr(self, "semantic_seg_min_px", 0)))
                     loss = loss + SEG_W * seg_l
                     if self._last_split_loss is not None:
                         self._last_split_loss["semantic_seg"] = float(seg_l.detach())
