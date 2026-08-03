@@ -26,6 +26,33 @@ from ..models.wan_video_text_encoder import WanTextEncoder, T5RelativeEmbedding,
 from ..models.wan_video_vae import WanVideoVAE, RMS_norm, CausalConv3d, Upsample
 from ..models.wan_video_neoverse_controller import NeoVerseControlBranch
 from ..schedulers.flow_match import FlowMatchScheduler
+
+
+def _segment_homogeneity_loss(probs, seg):
+    """v8 Change 3. probs [N,C,H,W] softmax class probs; seg [N,H,W] int
+    segment ids (0 = unassigned, skipped). Per segment: mean class
+    distribution over its pixels (detached) becomes each member pixel's soft
+    CE target. Perfectly uniform segments cost ~0; disagreement (speckle)
+    costs. Per-frame loop is fine: N is small (decoded CE prefix, ~5)."""
+    N, C, _, _ = probs.shape
+    total = probs.new_zeros(())
+    count = 0
+    for n in range(N):
+        s = seg[n].reshape(-1)
+        p = probs[n].reshape(C, -1).t()                     # [HW, C]
+        valid = s > 0
+        if not valid.any():
+            continue
+        s_v, p_v = s[valid], p[valid]
+        K = int(s_v.max())
+        sums = probs.new_zeros(K + 1, C).index_add_(0, s_v, p_v)
+        cnts = probs.new_zeros(K + 1).index_add_(
+            0, s_v, torch.ones_like(s_v, dtype=probs.dtype))
+        mean = sums / cnts.clamp(min=1.0).unsqueeze(1)
+        tgt = mean.detach()[s_v]                            # [Nv, C]
+        total = total - (tgt * (p_v + 1e-8).log()).sum(1).mean()
+        count += 1
+    return total / max(count, 1)
 from ..prompters import WanPrompter
 from ..vram_management import enable_vram_management, AutoWrappedModule, AutoWrappedLinear, WanAutoCastLayerNorm
 from ..lora import GeneralLoRALoader, LightX2VLoRALoader
@@ -150,6 +177,22 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 loss = loss + CE_W * ce
                 if self._last_split_loss is not None:
                     self._last_split_loss["semantic_ce"] = float(ce.detach())
+
+                # v8 Change 3: segment-homogeneity loss on the same decoded
+                # logits. SAM2 segments say "these pixels belong together";
+                # each pixel pays CE against its segment's (detached) mean
+                # class distribution. Uniform segments pay ~0; speckle IS
+                # within-segment disagreement, so it pays directly.
+                SEG_W = float(getattr(self, "semantic_seg_weight", 0.0))
+                segs = inputs.get("semantic_segments", None)
+                if SEG_W > 0.0 and segs is not None:
+                    seg = segs[:, :n_vid].reshape(
+                        -1, *segs.shape[-2:]).long().to(logits.device)
+                    probs = torch.nn.functional.softmax(logits, dim=1)
+                    seg_l = _segment_homogeneity_loss(probs, seg)
+                    loss = loss + SEG_W * seg_l
+                    if self._last_split_loss is not None:
+                        self._last_split_loss["semantic_seg"] = float(seg_l.detach())
 
         return loss
 
@@ -515,6 +558,19 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 order_indices = torch.argsort(source_views["timestamp"][b_idx])
                 semantic_labels[b_idx] = semantic_labels[b_idx][order_indices]
 
+        # v8 Change 3: SAM2 class-agnostic segments ride the same sort so they
+        # stay frame-aligned with semantic_labels / input_latents. Consumed by
+        # the segment-homogeneity loss in training_loss.
+        semantic_segments = None
+        if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and "segments" in source_views:
+            segs = source_views["segments"]
+            if isinstance(segs, np.ndarray):
+                segs = torch.from_numpy(segs)
+            semantic_segments = segs.clone()
+            for b_idx in range(len(semantic_segments)):
+                order_indices = torch.argsort(source_views["timestamp"][b_idx])
+                semantic_segments[b_idx] = semantic_segments[b_idx][order_indices]
+
         if target_rgb is not None and target_depth is not None and target_mask is not None and target_poses is not None and target_intrs is not None:
             return {
                 "input_video": input_video,
@@ -530,6 +586,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 # control_branch's expanded 112-ch patch_embed will crash.
                 "target_semantic": target_semantic,
                 "semantic_labels": semantic_labels,
+                "semantic_segments": semantic_segments,
             }
 
         pipe.load_models_to_device(self.onload_model_names)
@@ -645,6 +702,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             "target_intrs": target_intrs,
             "target_semantic": target_semantic,   # None on RGB-only runs
             "semantic_labels": semantic_labels,   # None on RGB-only runs or when no dataloader labels
+            "semantic_segments": semantic_segments,   # v8 Change 3; None unless segments_dir configured
         }
 
     def compose_batches_from_list(self, batch):

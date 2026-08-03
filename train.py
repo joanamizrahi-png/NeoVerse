@@ -31,6 +31,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_ce_weight: float = 0.0,       # v8 Change 2: decoded-space CE weight (0 = off)
         semantic_ce_sigma_max: float = 0.7,    # apply CE only at timesteps with sigma below this
         semantic_ce_latent_frames: int = 2,    # latent frames to VAE-decode for CE (memory bound)
+        semantic_seg_weight: float = 0.0,      # v8 Change 3: SAM2 segment-homogeneity weight (0 = off)
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
     ):
         super().__init__()
@@ -93,6 +94,10 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_ce_weight = float(semantic_ce_weight)
             self.pipe.semantic_ce_sigma_max = float(semantic_ce_sigma_max)
             self.pipe.semantic_ce_latent_frames = int(semantic_ce_latent_frames)
+            self.pipe.semantic_seg_weight = float(semantic_seg_weight)
+            if semantic_seg_weight > 0.0:
+                assert semantic_ce_weight > 0.0, \
+                    "semantic_seg_weight rides the CE head's decoded logits; set semantic_ce_weight too"
             if semantic_ce_weight > 0.0:
                 assert semantic_x0_prediction, \
                     "semantic_ce_weight requires semantic_x0_prediction: true"
@@ -211,6 +216,7 @@ if __name__ == "__main__":
         semantic_ce_weight=float(getattr(args, "semantic_ce_weight", 0.0)),
         semantic_ce_sigma_max=float(getattr(args, "semantic_ce_sigma_max", 0.7)),
         semantic_ce_latent_frames=int(getattr(args, "semantic_ce_latent_frames", 2)),
+        semantic_seg_weight=float(getattr(args, "semantic_seg_weight", 0.0)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make

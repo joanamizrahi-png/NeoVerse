@@ -542,8 +542,11 @@ def launch_training_task(
                     except Exception:
                         split_loss = None
                     if split_loss is not None:
-                        log_writer.add_scalar("train_rgb_loss", split_loss["rgb"], step)
-                        log_writer.add_scalar("train_semantic_loss", split_loss["semantic"], step)
+                        # Log EVERY key generically (was hardcoded to rgb+semantic,
+                        # which silently dropped v8's "semantic_ce" and any future
+                        # loss terms — found when a smoke run showed no CE trace).
+                        for k, v in split_loss.items():
+                            log_writer.add_scalar(f"train_{k}_loss", v, step)
                     # Mirror to W&B when it's live. Gets us live loss curves on
                     # wandb.ai in addition to the local tensorboard writer.
                     if wandb_run is not None:
@@ -553,8 +556,8 @@ def launch_training_task(
                             "train/epoch": epoch_f,
                         }
                         if split_loss is not None:
-                            log_dict["train/rgb_loss"] = split_loss["rgb"]
-                            log_dict["train/semantic_loss"] = split_loss["semantic"]
+                            for k, v in split_loss.items():
+                                log_dict[f"train/{k}_loss"] = v
                         wandb_run.log(log_dict, step=step)
             # Guard the modulo: on a 1-clip smoke dataset, int(save_freq * len(dataloader))
             # rounds to 0 and % 0 crashes. Cap at 1 so the intermediate save silently no-ops

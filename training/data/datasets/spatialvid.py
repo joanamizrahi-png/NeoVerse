@@ -25,7 +25,7 @@ def VideoReader_contextmanager(*args, **kwargs):
 
 
 class SpatialVID(BaseDataset):
-    def __init__(self, ROOT, labels_dir=None, target_labels_dir=None, *args, **kwargs):
+    def __init__(self, ROOT, labels_dir=None, target_labels_dir=None, segments_dir=None, *args, **kwargs):
         """
         Args:
             ROOT: SpatialVID root directory.
@@ -42,6 +42,10 @@ class SpatialVID(BaseDataset):
         self.ROOT = ROOT
         self.labels_dir = labels_dir
         self.target_labels_dir = target_labels_dir
+        # v8 Change 3: per-clip SAM2 class-agnostic segments ("<scene_id>.npz",
+        # "segments" [N,H,W] int16, from sam2_precompute_segments.py). Feeds the
+        # segment-homogeneity loss. None = no segments, loss stays off.
+        self.segments_dir = segments_dir
         super().__init__(*args, **kwargs)
         self.loaded_data = self._load_data()
 
@@ -101,6 +105,16 @@ class SpatialVID(BaseDataset):
                 safe_index = np.minimum(sample_index, len(all_gt) - 1)
                 per_frame_target_labels = all_gt[safe_index]   # [num_views, H, W]
 
+        # v8 Change 3: SAM2 segments, same indexing as the labels above.
+        per_frame_segments = None
+        if self.segments_dir is not None:
+            seg_path = osp.join(self.segments_dir, f"{scene_info['id']}.npz")
+            if osp.exists(seg_path):
+                with np.load(seg_path) as d:
+                    all_segs = d["segments"]
+                safe_index = np.minimum(sample_index, len(all_segs) - 1)
+                per_frame_segments = all_segs[safe_index]   # [num_views, H, W]
+
         context_views = []
         target_views = []
         for v, rgb_image in enumerate(images):
@@ -127,6 +141,8 @@ class SpatialVID(BaseDataset):
                 view["labels"] = per_frame_labels[v].astype(np.int32)
             if per_frame_target_labels is not None:
                 view["target_labels"] = per_frame_target_labels[v].astype(np.int32)
+            if per_frame_segments is not None:
+                view["segments"] = per_frame_segments[v].astype(np.int32)
             if view["is_target"]:
                 target_views.append(view)
             else:
