@@ -86,10 +86,12 @@ def main():
     print(f"{stem}: {len(frames)} frames @ {frames[0].size}", flush=True)
 
     from transformers import pipeline
+    # fp32 on purpose: the mask-generation postprocessing (torchvision NMS)
+    # chokes on bf16 ("dets should have the same type as scores", job 406530).
+    # The model is 1.8 GB — fp32 costs nothing on an H100.
     generator = pipeline(
         "mask-generation", model=args.model_id,
         device=0 if torch.cuda.is_available() else -1,
-        torch_dtype=torch.bfloat16,
     )
 
     seg_maps = []
