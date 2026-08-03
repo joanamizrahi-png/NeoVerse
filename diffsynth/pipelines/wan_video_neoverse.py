@@ -28,12 +28,17 @@ from ..models.wan_video_neoverse_controller import NeoVerseControlBranch
 from ..schedulers.flow_match import FlowMatchScheduler
 
 
-def _segment_homogeneity_loss(probs, seg):
+def _segment_homogeneity_loss(probs, seg, min_px: int = 400):
     """v8 Change 3. probs [N,C,H,W] softmax class probs; seg [N,H,W] int
     segment ids (0 = unassigned, skipped). Per segment: mean class
     distribution over its pixels (detached) becomes each member pixel's soft
     CE target. Perfectly uniform segments cost ~0; disagreement (speckle)
-    costs. Per-frame loop is fine: N is small (decoded CE prefix, ~5)."""
+    costs. Per-frame loop is fine: N is small (decoded CE prefix, ~5).
+
+    min_px: segments smaller than this contribute nothing. SAM2 produces
+    confetti on hard scenes (creek: unstable micro-fragments) — tiny segments
+    carry no real "belongs together" information, only noise. 400 px ~= a
+    20x20 patch at our 560x336 resolution."""
     N, C, _, _ = probs.shape
     total = probs.new_zeros(())
     count = 0
@@ -48,9 +53,13 @@ def _segment_homogeneity_loss(probs, seg):
         sums = probs.new_zeros(K + 1, C).index_add_(0, s_v, p_v)
         cnts = probs.new_zeros(K + 1).index_add_(
             0, s_v, torch.ones_like(s_v, dtype=probs.dtype))
+        keep = cnts[s_v] >= float(min_px)                   # per-pixel gate
+        if not keep.any():
+            continue
         mean = sums / cnts.clamp(min=1.0).unsqueeze(1)
         tgt = mean.detach()[s_v]                            # [Nv, C]
-        total = total - (tgt * (p_v + 1e-8).log()).sum(1).mean()
+        ce = -(tgt * (p_v + 1e-8).log()).sum(1)
+        total = total + (ce * keep).sum() / keep.sum()
         count += 1
     return total / max(count, 1)
 from ..prompters import WanPrompter
@@ -189,7 +198,9 @@ class WanVideoNeoVersePipeline(BasePipeline):
                     seg = segs[:, :n_vid].reshape(
                         -1, *segs.shape[-2:]).long().to(logits.device)
                     probs = torch.nn.functional.softmax(logits, dim=1)
-                    seg_l = _segment_homogeneity_loss(probs, seg)
+                    seg_l = _segment_homogeneity_loss(
+                        probs, seg,
+                        min_px=int(getattr(self, "semantic_seg_min_px", 400)))
                     loss = loss + SEG_W * seg_l
                     if self._last_split_loss is not None:
                         self._last_split_loss["semantic_seg"] = float(seg_l.detach())
