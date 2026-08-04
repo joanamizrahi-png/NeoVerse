@@ -33,7 +33,7 @@ RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 if [[ -n "${EPOCH:-}" ]]; then
     CKPT="$RUNS/checkpoint-epoch-${EPOCH}.safetensors"
 else
-    CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors | head -1)
+    CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors 2>/dev/null | head -1 || true)
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
