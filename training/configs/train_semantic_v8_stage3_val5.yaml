@@ -73,7 +73,7 @@ batch_size: 1
 num_workers: 2
 pin_memory: false
 gradient_accumulation_steps: 1
-output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v8_stage3
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v8_stage3_val5
 remove_prefix_in_ckpt: pipe.
 
 use_gradient_checkpointing: true
