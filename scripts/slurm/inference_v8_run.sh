@@ -25,7 +25,8 @@ export PYTHONNOUSERSITE=1
 hash -r
 
 cd /scratch/m000204-pm06b/joana/NeoVerse
-RUN_NAME=${RUN_NAME:?set RUN_NAME=train_semantic_v8_stage2_val5 etc via --export}
+RUN_NAME=${RUN_NAME:?set RUN_NAME=... via --export}
+CLIP=${CLIP:-rugd_trail_00}
 echo "commit: $(git log --oneline -1)"
 RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 
@@ -37,10 +38,10 @@ else
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_rugdtrail"
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}"
 mkdir -p "$OUT"
 python inference_semantic.py \
-    --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/rugd_trail_00.mp4 \
+    --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
     --checkpoint "$CKPT" \
     --output_dir "$OUT" \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
