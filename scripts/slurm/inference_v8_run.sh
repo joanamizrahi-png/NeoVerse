@@ -29,12 +29,14 @@ RUN_NAME=${RUN_NAME:?set RUN_NAME=train_semantic_v8_stage2_val5 etc via --export
 echo "commit: $(git log --oneline -1)"
 RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 
-CKPT="$RUNS/checkpoint-epoch-5.safetensors"
-if [[ ! -f "$CKPT" ]]; then
-    echo "==> epoch-5 not found; contents of $RUNS:"; ls "$RUNS"
+# EPOCH env selects the checkpoint; unset -> newest by mtime (the final one).
+if [[ -n "${EPOCH:-}" ]]; then
+    CKPT="$RUNS/checkpoint-epoch-${EPOCH}.safetensors"
+else
     CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors | head -1)
-    echo "==> falling back to $CKPT"
 fi
+[[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
+echo "==> rendering $CKPT"
 OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_rugdtrail"
 mkdir -p "$OUT"
 python inference_semantic.py \
