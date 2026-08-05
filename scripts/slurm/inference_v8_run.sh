@@ -27,6 +27,12 @@ hash -r
 cd /scratch/m000204-pm06b/joana/NeoVerse
 RUN_NAME=${RUN_NAME:?set RUN_NAME=... via --export}
 CLIP=${CLIP:-rugd_trail_00}
+NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
+if [ "$NUM_CLASSES" = "14" ]; then
+    LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
+else
+    LABELS=outputs/sam3_labels/${CLIP}.npz
+fi
 echo "commit: $(git log --oneline -1)"
 RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 
@@ -50,6 +56,8 @@ python inference_semantic.py \
     --semantic_expansion_version 2 \
     --lora_rank 8 \
     --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
+    --semantic_labels "$LABELS" \
+    --num_semantic_classes $NUM_CLASSES \
     --semantic_x0_prediction
 
 echo "==> v8 val5 inference done: $OUT"
