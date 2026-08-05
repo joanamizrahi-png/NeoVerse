@@ -9,7 +9,7 @@ rm -rf "$DST"
 cp -as "$SRC" "$DST"
 N=0
 for H in $HELD_OUT; do
-    while IFS= read -r f; do rm -f "$f"; N=$((N+1)); done \
+    while IFS= read -r f; do rm -rf "$f"; N=$((N+1)); done \
         < <(find "$DST" -name "${H}*")
 done
 echo "built $DST (removed $N held-out entries: $HELD_OUT)"

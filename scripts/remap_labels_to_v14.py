@@ -19,10 +19,17 @@ from glob import glob
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from diffsynth.utils.class_taxonomy import (
-    V14_NAMES, V14, NUM_CLASSES_V14, remap_array_from_names,
-)
+# Load the taxonomy module directly by path: importing via the diffsynth
+# package would pull heavy deps (torch/modelscope) that plain login-node
+# python doesn't have — this script is numpy-only on purpose.
+import importlib.util
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_spec = importlib.util.spec_from_file_location(
+    "class_taxonomy", os.path.join(_root, "diffsynth/utils/class_taxonomy.py"))
+_tax = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_tax)
+V14_NAMES, V14 = _tax.V14_NAMES, _tax.V14
+NUM_CLASSES_V14, remap_array_from_names = _tax.NUM_CLASSES_V14, _tax.remap_array_from_names
 
 # GT files (prepare_rugd_gt_labels.py) may lack class_names metadata; they are
 # known to be in the CLASS_COLORS ordering — declared here once, by name.
