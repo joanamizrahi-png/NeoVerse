@@ -245,6 +245,8 @@ def semantic_inference(
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
     num_semantic_classes: int = 30,        # 30 legacy / 14 for v9+ checkpoints — sets the palette
     decode_with_head: bool = False,        # class ids from the trained reader instead of palette snap
+    traj_angle: "float | None" = None,     # pan/tilt/orbit magnitude in degrees (None = preset default)
+    traj_distance: "float | None" = None,  # move/push magnitude in scene units (None = preset default)
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
@@ -329,6 +331,7 @@ def semantic_inference(
     # ---- 5. Build camera trajectory ----
     cam_traj = CameraTrajectory.from_predefined(
         trajectory, num_frames=len(images), mode="relative",
+        angle=traj_angle, distance=traj_distance,
     )
 
     # ---- 6. Reconstruct + render (same as inference.py) ----
@@ -543,6 +546,8 @@ def parse_args():
                    help="Must match training-time lora_rank")
     p.add_argument("--num_semantic_classes", type=int, default=30,
                    help="30 legacy / 14 for v9+ checkpoints (selects the palette)")
+    p.add_argument("--traj_angle", type=float, default=None)
+    p.add_argument("--traj_distance", type=float, default=None)
     p.add_argument("--decode_with_head", action="store_true",
                    help="decode class ids with the checkpoint's trained reader (v8 stage2+ / v9)")
     p.add_argument("--semantic_x0_prediction", action="store_true",
@@ -600,6 +605,8 @@ def main():
         semantic_x0_prediction=args.semantic_x0_prediction,
         num_semantic_classes=args.num_semantic_classes,
         decode_with_head=args.decode_with_head,
+        traj_angle=args.traj_angle,
+        traj_distance=args.traj_distance,
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),

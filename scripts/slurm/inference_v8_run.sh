@@ -28,6 +28,10 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 RUN_NAME=${RUN_NAME:?set RUN_NAME=... via --export}
 CLIP=${CLIP:-rugd_trail_00}
 TRAJ=${TRAJ:-static}   # move_left / pan_left / orbit_left... for off-trajectory probes
+MAG=""
+TRAJARGS=""
+if [ -n "${ANGLE:-}" ]; then TRAJARGS="$TRAJARGS --traj_angle $ANGLE"; MAG="${MAG}_a${ANGLE}"; fi
+if [ -n "${DIST:-}" ]; then TRAJARGS="$TRAJARGS --traj_distance $DIST"; MAG="${MAG}_d${DIST}"; fi
 EXTRA=""
 DECSUF=""
 if [ "${HEAD_DECODE:-0}" = "1" ]; then EXTRA="--decode_with_head"; DECSUF="_head"; fi
@@ -48,7 +52,7 @@ else
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${DECSUF}"
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}"
 mkdir -p "$OUT"
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
@@ -62,6 +66,6 @@ python inference_semantic.py \
     --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
     --semantic_labels "$LABELS" \
     --num_semantic_classes $NUM_CLASSES \
-    --semantic_x0_prediction $EXTRA
+    --semantic_x0_prediction $EXTRA $TRAJARGS
 
 echo "==> v8 val5 inference done: $OUT"

@@ -24,11 +24,15 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 echo "commit: $(git log --oneline -1)"
 CLIP=${CLIP:-rugd_trail_00}
 TRAJ=${TRAJ:-static}
-OUT=/scratch/m000204-pm06b/joana/inference_VANILLA_${CLIP}_${TRAJ}
+MAG=""
+TRAJARGS=""
+if [ -n "${ANGLE:-}" ]; then TRAJARGS="$TRAJARGS --angle $ANGLE"; MAG="${MAG}_a${ANGLE}"; fi
+if [ -n "${DIST:-}" ]; then TRAJARGS="$TRAJARGS --distance $DIST"; MAG="${MAG}_d${DIST}"; fi
+OUT=/scratch/m000204-pm06b/joana/inference_VANILLA_${CLIP}_${TRAJ}${MAG}
 mkdir -p "$OUT"
 python inference.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
-    --trajectory "$TRAJ" \
+    --trajectory "$TRAJ" $TRAJARGS \
     --output_path "$OUT/rgb_vanilla.mp4" \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
