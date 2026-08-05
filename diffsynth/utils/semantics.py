@@ -75,6 +75,12 @@ def set_active_palette(num_classes: int):
     return _ACTIVE_PALETTE
 
 
+def get_active_palette() -> torch.Tensor:
+    """The palette currently selected by set_active_palette (colorize AND
+    any artifact-saving code must use this, never CLASS_COLORS directly)."""
+    return _ACTIVE_PALETTE
+
+
 def labels_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """[*, H, W] int class ids  ->  [*, H, W, 3] float in [0,1] (colorized image)."""
     pal = _ACTIVE_PALETTE

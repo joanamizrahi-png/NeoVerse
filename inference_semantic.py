@@ -50,6 +50,7 @@ from diffsynth.utils.semantics import (
     expand_control_branch_for_semantics,
     CLASS_COLORS,
     NUM_CLASSES,
+    get_active_palette,
     rgb_to_labels,
 )
 
@@ -201,7 +202,7 @@ def _sem_video_to_labels_and_colorized(sem_video: torch.Tensor) -> tuple[np.ndar
     labels_np = labels.cpu().numpy().astype(np.int8)
 
     # Colorize with the canonical palette (crisper than the VAE-decoded blobs)
-    palette = (CLASS_COLORS.detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
+    palette = (get_active_palette().detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
     sem_rgb = palette[labels_np]                       # [T, H, W, 3] uint8
     return labels_np, sem_rgb
 
@@ -409,7 +410,7 @@ def semantic_inference(
         # this MP4 is the "before", semantic.mp4 is the "after".
         os.makedirs(output_dir, exist_ok=True)
         holey_labels = target_semantic[0].detach().cpu().numpy().astype(np.int8)
-        palette = (CLASS_COLORS.detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
+        palette = (get_active_palette().detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
         holey_rgb = palette[np.clip(holey_labels, 0, NUM_CLASSES - 1)]  # [T, H, W, 3]
         import imageio.v3 as iio
         holey_out = os.path.join(output_dir, "holey_semantic.mp4")

@@ -27,6 +27,7 @@ hash -r
 cd /scratch/m000204-pm06b/joana/NeoVerse
 RUN_NAME=${RUN_NAME:?set RUN_NAME=... via --export}
 CLIP=${CLIP:-rugd_trail_00}
+TRAJ=${TRAJ:-static}   # move_left / pan_left / orbit_left... for off-trajectory probes
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
@@ -44,7 +45,7 @@ else
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}"
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}"
 mkdir -p "$OUT"
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
@@ -52,7 +53,7 @@ python inference_semantic.py \
     --output_dir "$OUT" \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt \
-    --trajectory static \
+    --trajectory "$TRAJ" \
     --semantic_expansion_version 2 \
     --lora_rank 8 \
     --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
