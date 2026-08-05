@@ -28,6 +28,9 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 RUN_NAME=${RUN_NAME:?set RUN_NAME=... via --export}
 CLIP=${CLIP:-rugd_trail_00}
 TRAJ=${TRAJ:-static}   # move_left / pan_left / orbit_left... for off-trajectory probes
+EXTRA=""
+DECSUF=""
+if [ "${HEAD_DECODE:-0}" = "1" ]; then EXTRA="--decode_with_head"; DECSUF="_head"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
@@ -45,7 +48,7 @@ else
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}"
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${DECSUF}"
 mkdir -p "$OUT"
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
@@ -59,6 +62,6 @@ python inference_semantic.py \
     --lora_target_modules "q,k,v,o,ffn.0,ffn.2" \
     --semantic_labels "$LABELS" \
     --num_semantic_classes $NUM_CLASSES \
-    --semantic_x0_prediction
+    --semantic_x0_prediction $EXTRA
 
 echo "==> v8 val5 inference done: $OUT"

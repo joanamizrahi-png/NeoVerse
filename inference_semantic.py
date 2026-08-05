@@ -181,11 +181,18 @@ def _decoded_video_to_uint8(video_tensor: torch.Tensor) -> np.ndarray:
 
 
 @torch.no_grad()
-def _sem_video_to_labels_and_colorized(sem_video: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+def _sem_video_to_labels_and_colorized(sem_video: torch.Tensor, head=None) -> tuple[np.ndarray, np.ndarray]:
     """From the VAE-decoded semantic video (RGB in [-1,1]) produce:
       * labels  : [T, H, W] int class ids (0..NUM_CLASSES-1)
       * sem_rgb : [T, H, W, 3] uint8 colorized with the canonical palette
                   (may look sharper than the raw VAE output; that's the point)
+
+    head: the checkpoint's trained SemanticClassHead. When given, class ids
+    come from the LEARNED READER (context-aware logits over the decoded
+    frames) instead of nearest-palette-color snapping — the reader was
+    trained by the CE loss to decode exactly this signal, including
+    low-confidence mush that palette snapping assigns to whatever color is
+    accidentally nearest (the bridge-teal / sky-sidewalk failures).
     """
     x = sem_video.detach().to(torch.float32).cpu()
     if x.ndim == 5 and x.shape[0] == 1:
@@ -197,8 +204,15 @@ def _sem_video_to_labels_and_colorized(sem_video: torch.Tensor) -> tuple[np.ndar
             x = x.permute(0, 2, 3, 1)
     x = ((x + 1.0) * 0.5).clamp_(0.0, 1.0)             # [T, H, W, 3] float in [0,1]
 
-    # Nearest-palette-color snap -> class ids
-    labels = rgb_to_labels(x)                          # [T, H, W] int
+    if head is not None:
+        # learned reader: [T,H,W,3] in [0,1] -> [-1,1] [T,3,H,W] (its training diet)
+        head = head.float().cpu()
+        frames = (x * 2.0 - 1.0).permute(0, 3, 1, 2)
+        labels = torch.cat([head(frames[i:i + 8]).argmax(1)
+                            for i in range(0, frames.shape[0], 8)], dim=0)
+    else:
+        # Nearest-palette-color snap -> class ids
+        labels = rgb_to_labels(x)                      # [T, H, W] int
     labels_np = labels.cpu().numpy().astype(np.int8)
 
     # Colorize with the canonical palette (crisper than the VAE-decoded blobs)
@@ -230,6 +244,7 @@ def semantic_inference(
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
     num_semantic_classes: int = 30,        # 30 legacy / 14 for v9+ checkpoints — sets the palette
+    decode_with_head: bool = False,        # class ids from the trained reader instead of palette snap
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
@@ -461,7 +476,12 @@ def semantic_inference(
               "with semantic_channels? Skipping semantic save.", flush=True)
         return
 
-    labels, sem_rgb = _sem_video_to_labels_and_colorized(sink["sem_video"])
+    head = getattr(pipe, "semantic_class_head", None) if decode_with_head else None
+    if decode_with_head and head is None:
+        print("WARNING: --decode_with_head requested but checkpoint has no class head; using palette snap")
+    labels, sem_rgb = _sem_video_to_labels_and_colorized(sink["sem_video"], head=head)
+    if head is not None:
+        print("Decoded classes with the LEARNED READER (semantic_class_head)")
     import imageio.v3 as iio
 
     # Save the RAW VAE-decoded semantic video BEFORE palette snapping. semantic.mp4
@@ -523,6 +543,8 @@ def parse_args():
                    help="Must match training-time lora_rank")
     p.add_argument("--num_semantic_classes", type=int, default=30,
                    help="30 legacy / 14 for v9+ checkpoints (selects the palette)")
+    p.add_argument("--decode_with_head", action="store_true",
+                   help="decode class ids with the checkpoint's trained reader (v8 stage2+ / v9)")
     p.add_argument("--semantic_x0_prediction", action="store_true",
                    help="Must match training: v8 checkpoints REQUIRE this "
                         "(sem half outputs the clean latent); v6/v7 must omit it")
@@ -577,6 +599,7 @@ def main():
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
         num_semantic_classes=args.num_semantic_classes,
+        decode_with_head=args.decode_with_head,
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),
