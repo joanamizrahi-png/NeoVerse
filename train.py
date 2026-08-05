@@ -89,6 +89,9 @@ class WanTrainingModule(DiffusionTrainingModule):
             # Loss weight for the semantic half of the 32-ch MSE. Default 4.0.
             self.pipe.semantic_loss_weight = float(semantic_loss_weight)
             self.pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+            # v14: colorize/decode follow the configured class count everywhere.
+            from diffsynth.utils.semantics import set_active_palette
+            set_active_palette(int(num_semantic_classes))
             # v8 Change 2: decoded-space CE. The head must exist BEFORE
             # freeze_except so `semantic_class_head` in trainable_models can
             # unfreeze it; requires x0-prediction (it reads the clean-latent guess).

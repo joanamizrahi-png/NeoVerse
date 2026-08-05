@@ -228,6 +228,7 @@ def semantic_inference(
     semantic_channels: int = 16,
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
+    num_semantic_classes: int = 30,        # 30 legacy / 14 for v9+ checkpoints — sets the palette
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
@@ -255,6 +256,8 @@ def semantic_inference(
     if not disable_semantic_channels:
         pipe.semantic_channels = semantic_channels
         pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+        from diffsynth.utils.semantics import set_active_palette
+        set_active_palette(int(num_semantic_classes))
         if semantic_expansion_version == 1:
             expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
             if pipe.control_branch is not None:
@@ -517,6 +520,8 @@ def parse_args():
                         "2 = v6 parallel _sem submodules.")
     p.add_argument("--lora_rank", type=int, default=32,
                    help="Must match training-time lora_rank")
+    p.add_argument("--num_semantic_classes", type=int, default=30,
+                   help="30 legacy / 14 for v9+ checkpoints (selects the palette)")
     p.add_argument("--semantic_x0_prediction", action="store_true",
                    help="Must match training: v8 checkpoints REQUIRE this "
                         "(sem half outputs the clean latent); v6/v7 must omit it")
@@ -570,6 +575,7 @@ def main():
         semantic_channels=args.semantic_channels,
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
+        num_semantic_classes=args.num_semantic_classes,
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),

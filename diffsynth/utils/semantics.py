@@ -55,10 +55,31 @@ CLASS_COLORS = torch.tensor([
 NUM_CLASSES = CLASS_COLORS.shape[0]
 
 
+# v14: the active palette is selectable once at startup (train.py /
+# inference_semantic.py call set_active_palette with their num_semantic_classes)
+# so every colorize/decode site follows without threading a parameter through.
+_ACTIVE_PALETTE = CLASS_COLORS
+
+
+def set_active_palette(num_classes: int):
+    """Switch colorize/decode to the palette for `num_classes`. 30 = legacy
+    CLASS_COLORS (default); 14 = the v14 navigation taxonomy."""
+    global _ACTIVE_PALETTE
+    if num_classes == NUM_CLASSES:
+        _ACTIVE_PALETTE = CLASS_COLORS
+    else:
+        from .class_taxonomy import v14_palette, NUM_CLASSES_V14
+        assert num_classes == NUM_CLASSES_V14, \
+            f"no palette defined for num_classes={num_classes}"
+        _ACTIVE_PALETTE = v14_palette()
+    return _ACTIVE_PALETTE
+
+
 def labels_to_rgb(labels: torch.Tensor) -> torch.Tensor:
     """[*, H, W] int class ids  ->  [*, H, W, 3] float in [0,1] (colorized image)."""
-    idx = labels.long().clamp(0, NUM_CLASSES - 1)
-    return CLASS_COLORS.to(labels.device)[idx]
+    pal = _ACTIVE_PALETTE
+    idx = labels.long().clamp(0, pal.shape[0] - 1)
+    return pal.to(labels.device)[idx]
 
 
 def rgb_to_labels(rgb: torch.Tensor) -> torch.Tensor:
@@ -66,7 +87,7 @@ def rgb_to_labels(rgb: torch.Tensor) -> torch.Tensor:
 
     Use this to decode the diffusion's generated/decoded semantic image back to classes.
     """
-    d = (rgb.unsqueeze(-2) - CLASS_COLORS.to(rgb.device)).pow(2).sum(-1)   # [*, H, W, K]
+    d = (rgb.unsqueeze(-2) - _ACTIVE_PALETTE.to(rgb.device)).pow(2).sum(-1)   # [*, H, W, K]
     return d.argmin(-1)
 
 
