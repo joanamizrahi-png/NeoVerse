@@ -251,6 +251,7 @@ def semantic_inference(
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
     semantic_labels: "np.ndarray | None" = None,
+    anchor_traj_path: "str | None" = None,  # RGB latent trajectory from a vanilla --save_traj pass
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -455,6 +456,18 @@ def semantic_inference(
     # ---- 8. Run diffusion ----
     num_inference_steps = 4 if use_lora else 50
     cfg_scale = 1.0 if use_lora else 5.0
+    rgb_anchor_traj = None
+    if anchor_traj_path is not None:
+        blob = torch.load(anchor_traj_path, map_location="cpu")
+        meta = blob["meta"]
+        assert meta["num_inference_steps"] == num_inference_steps, (
+            f"anchor was recorded at {meta['num_inference_steps']} steps but this run uses "
+            f"{num_inference_steps} — rerun the vanilla pass with matching --disable_lora setting")
+        assert (meta["height"], meta["width"]) == (height, width), (
+            f"anchor resolution {meta['height']}x{meta['width']} != run {height}x{width}")
+        rgb_anchor_traj = blob["traj"]
+        print(f"ANCHORED RGB: overriding RGB latents with vanilla trajectory from "
+              f"{anchor_traj_path} ({rgb_anchor_traj.shape[0]} states)", flush=True)
     print(f"Running diffusion ({num_inference_steps} steps, cfg={cfg_scale}) ...", flush=True)
     generated_frames = pipe(
         prompt=prompt,
@@ -462,6 +475,7 @@ def semantic_inference(
         seed=seed, rand_device=pipe.device,
         height=height, width=width, num_frames=len(target_cam2world),
         cfg_scale=cfg_scale, num_inference_steps=num_inference_steps, tiled=False,
+        rgb_anchor_traj=rgb_anchor_traj,
         **wrapped_data,
     )
 
@@ -564,6 +578,11 @@ def parse_args():
     p.add_argument("--semantic_labels", default=None,
                    help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
                         "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
+    p.add_argument("--anchor_traj", default=None,
+                   help="RGB latent trajectory .pt from a vanilla inference.py --save_traj pass. "
+                        "Overrides the RGB latent half with the vanilla trajectory at every "
+                        "denoising step, so the semantics describe exactly the vanilla RGB. "
+                        "Both passes must use the same steps (same --disable_lora) and size.")
     return p.parse_args()
 
 
@@ -612,6 +631,7 @@ def main():
                              if args.lora_target_modules else None),
         zero_trunk_lora=args.zero_trunk_lora,
         semantic_labels=semantic_labels,
+        anchor_traj_path=args.anchor_traj,
     )
 
 

@@ -52,7 +52,16 @@ else
 fi
 [[ -f "$CKPT" ]] || { echo "==> no checkpoint ($CKPT); contents:"; ls "$RUNS"; exit 1; }
 echo "==> rendering $CKPT"
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}"
+# ANCHOR=1 anchors the RGB latents to the matching vanilla run's saved trajectory
+# (run inference_vanilla_traj.sh with SAVE_TRAJ=1 and the same CLIP/TRAJ/ANGLE/DIST first).
+ANCSUF=""
+if [ "${ANCHOR:-0}" = "1" ]; then
+    TRAJPT=/scratch/m000204-pm06b/joana/inference_VANILLA_${CLIP}_${TRAJ}${MAG}/rgb_latent_traj.pt
+    [[ -f "$TRAJPT" ]] || { echo "==> no anchor trajectory at $TRAJPT — run the vanilla pass with SAVE_TRAJ=1 first"; exit 1; }
+    EXTRA="$EXTRA --anchor_traj $TRAJPT"
+    ANCSUF="_ANCHORED"
+fi
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}${ANCSUF}"
 mkdir -p "$OUT"
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \

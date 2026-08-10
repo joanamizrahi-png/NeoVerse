@@ -30,9 +30,11 @@ if [ -n "${ANGLE:-}" ]; then TRAJARGS="$TRAJARGS --angle $ANGLE"; MAG="${MAG}_a$
 if [ -n "${DIST:-}" ]; then TRAJARGS="$TRAJARGS --distance $DIST"; MAG="${MAG}_d${DIST}"; fi
 OUT=/scratch/m000204-pm06b/joana/inference_VANILLA_${CLIP}_${TRAJ}${MAG}
 mkdir -p "$OUT"
+TRAJSAVE=""
+if [ "${SAVE_TRAJ:-0}" = "1" ]; then TRAJSAVE="--save_traj $OUT/rgb_latent_traj.pt"; fi
 python inference.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
-    --trajectory "$TRAJ" $TRAJARGS \
+    --trajectory "$TRAJ" $TRAJARGS $TRAJSAVE \
     --output_path "$OUT/rgb_vanilla.mp4" \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt

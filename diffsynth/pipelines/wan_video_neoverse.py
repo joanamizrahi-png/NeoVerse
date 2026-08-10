@@ -465,6 +465,14 @@ class WanVideoNeoVersePipeline(BasePipeline):
         sliding_window_stride: Optional[int] = None,
         # progress_bar
         progress_bar_cmd=tqdm,
+        # RGB latent trajectory anchoring (two-pass alignment).
+        # latent_traj_sink: list to append the RGB latent half (CPU clone) at the
+        #   initial noised state and after every scheduler step -> len = steps+1.
+        # rgb_anchor_traj: tensor [steps+1, B, 16, f, h, w] from a previous vanilla
+        #   pass; the RGB half is overwritten with it at the same points, so the
+        #   semantic channels denoise conditioned on the vanilla RGB trajectory.
+        latent_traj_sink: Optional[list] = None,
+        rgb_anchor_traj: Optional[torch.Tensor] = None,
     ):
         # Scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
@@ -492,6 +500,18 @@ class WanVideoNeoVersePipeline(BasePipeline):
             inputs_shared, inputs_posi, inputs_nega = self.unit_runner(unit, self, inputs_shared, inputs_posi, inputs_nega)
 
         # Denoise
+        if rgb_anchor_traj is not None:
+            expected = len(self.scheduler.timesteps) + 1
+            assert rgb_anchor_traj.shape[0] == expected, (
+                f"anchor trajectory has {rgb_anchor_traj.shape[0]} states but this run "
+                f"needs {expected} (num_inference_steps mismatch between the two passes)")
+            assert rgb_anchor_traj.shape[2:] == inputs_shared["latents"][:, :16].shape[1:], (
+                f"anchor latent shape {tuple(rgb_anchor_traj.shape[2:])} != run shape "
+                f"{tuple(inputs_shared['latents'][:, :16].shape[1:])} (resolution/frames mismatch)")
+            inputs_shared["latents"][:, :16] = rgb_anchor_traj[0].to(
+                device=inputs_shared["latents"].device, dtype=inputs_shared["latents"].dtype)
+        if latent_traj_sink is not None:
+            latent_traj_sink.append(inputs_shared["latents"][:, :16].detach().to("cpu", torch.bfloat16).clone())
         self.load_models_to_device(self.in_iteration_models)
         models = {name: getattr(self, name) for name in self.in_iteration_models}
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
@@ -519,6 +539,12 @@ class WanVideoNeoVersePipeline(BasePipeline):
 
             # Scheduler
             inputs_shared["latents"] = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], inputs_shared["latents"])
+
+            if rgb_anchor_traj is not None:
+                inputs_shared["latents"][:, :16] = rgb_anchor_traj[progress_id + 1].to(
+                    device=inputs_shared["latents"].device, dtype=inputs_shared["latents"].dtype)
+            if latent_traj_sink is not None:
+                latent_traj_sink.append(inputs_shared["latents"][:, :16].detach().to("cpu", torch.bfloat16).clone())
 
         # Decode
         self.load_models_to_device(["vae"])

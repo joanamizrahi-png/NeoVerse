@@ -11,7 +11,8 @@ from diffsynth.utils.auxiliary import CameraTrajectory, load_video, homo_matrix_
 @torch.no_grad()
 def generate_video(pipe, input_video, prompt, negative_prompt, cam_traj: CameraTrajectory,
                    output_path="outputs/output.mp4", alpha_threshold=1.0, static_flag=False,
-                   seed=42, cfg_scale=1.0, num_inference_steps=4, semantic_labels=None, label_colors=None):
+                   seed=42, cfg_scale=1.0, num_inference_steps=4, semantic_labels=None, label_colors=None,
+                   save_traj_path=None):
     device = pipe.device
     height, width = input_video[0].size[1], input_video[0].size[0]
     views = {
@@ -104,15 +105,26 @@ def generate_video(pipe, input_video, prompt, negative_prompt, cam_traj: CameraT
         "target_poses": target_cam2world.unsqueeze(0),
         "target_intrs": K_zoomed.unsqueeze(0),
     }
+    traj_sink = [] if save_traj_path else None
     generated_frames = pipe(
         prompt=prompt,
         negative_prompt=negative_prompt,
         seed=seed, rand_device=pipe.device,
         height=height, width=width, num_frames=len(target_cam2world),
         cfg_scale=cfg_scale, num_inference_steps=num_inference_steps, tiled=False,
+        latent_traj_sink=traj_sink,
         **wrapped_data,
     )
     save_video(generated_frames, output_path, fps=16)
+    if save_traj_path:
+        os.makedirs(os.path.dirname(save_traj_path) or ".", exist_ok=True)
+        torch.save({
+            "traj": torch.stack(traj_sink),   # [steps+1, B, 16, f, h, w] bf16 cpu
+            "meta": {"num_inference_steps": num_inference_steps, "cfg_scale": cfg_scale,
+                     "seed": seed, "height": height, "width": width,
+                     "num_frames": len(target_cam2world)},
+        }, save_traj_path)
+        print(f"Saved RGB latent trajectory ({len(traj_sink)} states) to {save_traj_path}")
 
 
 def parse_args():
@@ -188,6 +200,9 @@ def parse_args():
     parser.add_argument("--semantic_labels", default=None,
                         help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
                              "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
+    parser.add_argument("--save_traj", default=None,
+                        help="Save the RGB latent denoising trajectory to this .pt file "
+                             "(for anchored semantic inference via --anchor_traj)")
 
     return parser.parse_args()
 
@@ -305,6 +320,7 @@ def main():
         num_inference_steps=num_inference_steps,
         semantic_labels=semantic_labels,
         label_colors=label_colors,
+        save_traj_path=args.save_traj,
     )
     print(f"Done! Output saved to: {output_path}")
     return 0
