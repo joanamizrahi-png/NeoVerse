@@ -224,6 +224,8 @@ class SplitPatchEmbedding(torch.nn.Module):
 
     def forward(self, x):
         base_out = self.base(x[:, :self.base_ch])
+        if getattr(self, "vanilla_mode", False):
+            return base_out
         sem_out = self.sem(x[:, self.base_ch:self.base_ch + self.sem_ch])
         return base_out + sem_out
 
@@ -322,6 +324,8 @@ class SplitControlPatchEmbedding(torch.nn.Module):
             [x[:, :self.sem_start], x[:, self.sem_start + self.sem_ch:]],
             dim=1,
         )
+        if getattr(self, "vanilla_mode", False):
+            return self.base(base_x)
         return self.base(base_x) + self.sem(sem_x)
 
     @property
@@ -431,3 +435,49 @@ class SemanticClassHead(torch.nn.Module):
         # x: [N, 3, H, W] decoded colorized frames in [-1, 1]; cast to our own
         # param dtype (the head may be fp32 while the pipe runs bf16).
         return self.net(x.to(next(self.parameters()).dtype))
+
+
+# ---------------------------------------------------------------------------
+# Vanilla-RGB reference mode (for the RGB-preservation loss).
+#
+# With the v2 expansion the RGB output can drift from the pretrained function
+# through exactly two doors: the trunk LoRA, and the `_sem` branches of the two
+# input-side Split wrappers (their output is SUMMED into the shared token
+# stream). SplitHead's RGB rows are a concat, structurally untouched by its sem
+# branch. So disabling those two doors reproduces the pretrained RGB function
+# bit-exactly, on the same conditioning, with no second model in memory.
+# ---------------------------------------------------------------------------
+from contextlib import contextmanager
+
+
+@contextmanager
+def vanilla_rgb_reference(*module_roots):
+    """Temporarily compute the exact pretrained (vanilla) RGB function.
+
+    Disables peft LoRA adapters and the `_sem` input branches on every module
+    under the given roots (pass the dit and, if used, the control_branch).
+    Restores everything on exit. Use under torch.no_grad().
+    """
+    try:
+        from peft.tuners.tuners_utils import BaseTunerLayer
+    except ImportError:
+        BaseTunerLayer = None
+    toggled_lora, toggled_split = [], []
+    for root in module_roots:
+        if root is None:
+            continue
+        for m in root.modules():
+            if BaseTunerLayer is not None and isinstance(m, BaseTunerLayer):
+                if hasattr(m, "enable_adapters"):
+                    m.enable_adapters(False)
+                    toggled_lora.append(m)
+            elif isinstance(m, (SplitPatchEmbedding, SplitControlPatchEmbedding)):
+                m.vanilla_mode = True
+                toggled_split.append(m)
+    try:
+        yield
+    finally:
+        for m in toggled_lora:
+            m.enable_adapters(True)
+        for m in toggled_split:
+            m.vanilla_mode = False

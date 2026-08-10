@@ -4,11 +4,18 @@ the canonical CLASS_COLORS palette. Runs anywhere with torch+numpy (Mac OK).
 Usage: python scripts/labels_npz_to_mp4.py in.npz out.mp4
 """
 import sys
+from pathlib import Path
 import numpy as np
 import imageio.v3 as iio
 
-sys.path.insert(0, ".")
-from diffsynth.utils.semantics import CLASS_COLORS, NUM_CLASSES
+# Load semantics.py directly by file path — importing the diffsynth package
+# pulls heavy deps (huggingface_hub etc.) that dev machines may lack.
+import importlib.util
+_sem_path = Path(__file__).resolve().parents[1] / "diffsynth/utils/semantics.py"
+_spec = importlib.util.spec_from_file_location("semantics_standalone", _sem_path)
+_sem = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sem)
+CLASS_COLORS, NUM_CLASSES = _sem.CLASS_COLORS, _sem.NUM_CLASSES
 
 def main():
     in_npz, out_mp4 = sys.argv[1], sys.argv[2]

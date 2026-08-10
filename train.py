@@ -34,6 +34,8 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_seg_weight: float = 0.0,      # v8 Change 3: SAM2 segment-homogeneity weight (0 = off)
         semantic_seg_min_px: int = 0,          # 0 = no size filter (default); >0 enables the confetti guard
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
+        rgb_preservation_weight: float = 0.0,  # v10 candidate: MSE to the frozen vanilla RGB prediction (0 = off)
+        snr_gamma: float = 0.0,                # v10 candidate: min-SNR timestep weighting cap (0 = off)
     ):
         super().__init__()
         # Load models. If distill_lora_path is set, the distill LoRA is merged
@@ -100,6 +102,8 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_ce_latent_frames = int(semantic_ce_latent_frames)
             self.pipe.semantic_seg_weight = float(semantic_seg_weight)
             self.pipe.semantic_seg_min_px = int(semantic_seg_min_px)
+            self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)
+            self.pipe.snr_gamma = float(snr_gamma)
             if semantic_seg_weight > 0.0:
                 assert semantic_ce_weight > 0.0, \
                     "semantic_seg_weight rides the CE head's decoded logits; set semantic_ce_weight too"
@@ -223,6 +227,8 @@ if __name__ == "__main__":
         semantic_ce_latent_frames=int(getattr(args, "semantic_ce_latent_frames", 2)),
         semantic_seg_weight=float(getattr(args, "semantic_seg_weight", 0.0)),
         semantic_seg_min_px=int(getattr(args, "semantic_seg_min_px", 0)),
+        rgb_preservation_weight=float(getattr(args, "rgb_preservation_weight", 0.0)),
+        snr_gamma=float(getattr(args, "snr_gamma", 0.0)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make

@@ -166,13 +166,49 @@ class WanVideoNeoVersePipeline(BasePipeline):
                     pred_f[:, 16:], inputs["input_latents"].float()[:, 16:])
             else:
                 sem_l = torch.nn.functional.mse_loss(pred_f[:, 16:], tgt_f[:, 16:])
-            loss = (rgb_l + SEM_WEIGHT * sem_l) * w
+
+            # v10 candidate: min-SNR timestep weighting (Hang et al., v-prediction
+            # form: min(SNR, gamma) / (SNR + 1)). Noise-vs-GT target choice is a
+            # timestep reweighting in disguise (VDM, arxiv 2107.00630) — this makes
+            # the weighting an explicit, capped choice instead of an inherited one.
+            # 0.0 (default) = off, keeps the scheduler weight w alone.
+            SNR_GAMMA = float(getattr(self, "snr_gamma", 0.0))
+            w_snr = 1.0
+            if SNR_GAMMA > 0.0:
+                t_id = torch.argmin((self.scheduler.timesteps.to(timestep.device)
+                                     - timestep).abs())
+                sigma_t = float(self.scheduler.sigmas[t_id])
+                snr = ((1.0 - sigma_t) / max(sigma_t, 1e-4)) ** 2
+                w_snr = min(snr, SNR_GAMMA) / (snr + 1.0)
+
+            loss = (rgb_l + SEM_WEIGHT * sem_l) * w * w_snr
+
+            # v10 candidate: RGB-preservation loss. A second no-grad forward with
+            # the LoRA adapters and _sem input branches disabled IS the pretrained
+            # (vanilla) RGB function on the same conditioning (see
+            # vanilla_rgb_reference). Penalizing distance to it regularizes the
+            # trainable pieces against dragging the RGB output — attacking the
+            # trunk-drift cause of the finetune's degraded RGB directly.
+            PRES_W = float(getattr(self, "rgb_preservation_weight", 0.0))
+            if PRES_W > 0.0:
+                from ..utils.semantics import vanilla_rgb_reference
+                with torch.no_grad(), vanilla_rgb_reference(
+                        inputs.get("dit"), inputs.get("control_branch")):
+                    with torch.amp.autocast("cuda", dtype=self.torch_dtype):
+                        ref_pred = self.model_fn(**inputs, timestep=timestep)
+                pres_l = torch.nn.functional.mse_loss(
+                    pred_f[:, :16], ref_pred.float()[:, :16])
+                loss = loss + PRES_W * pres_l * w
             # Stash pre-weight split values for wandb observability (comparable to
             # the RGB-side and unweighted-semantic components of `loss`).
             self._last_split_loss = {
                 "rgb": float((rgb_l * w).detach()),
                 "semantic": float((sem_l * w).detach()),
             }
+            if SNR_GAMMA > 0.0:
+                self._last_split_loss["w_snr"] = float(w_snr)
+            if PRES_W > 0.0:
+                self._last_split_loss["rgb_preservation"] = float((pres_l * w).detach())
         else:
             loss = torch.nn.functional.mse_loss(pred_f, tgt_f) * w
             self._last_split_loss = None
