@@ -190,6 +190,17 @@ class WanVideoNeoVersePipeline(BasePipeline):
             # trainable pieces against dragging the RGB output — attacking the
             # trunk-drift cause of the finetune's degraded RGB directly.
             PRES_W = float(getattr(self, "rgb_preservation_weight", 0.0))
+            # v10d: linear ramp 0 -> full weight over the first `RAMP` loss calls
+            # (GeoVideo-style schedule pointed at the preservation term): early
+            # training lets the semantic channels learn unleashed, late training
+            # pulls RGB back to vanilla. While the effective weight is 0 the
+            # reference forward is skipped entirely (early epochs run faster).
+            # The counter resets on resume — don't resume a ramped run.
+            RAMP = int(getattr(self, "rgb_preservation_ramp_steps", 0))
+            if PRES_W > 0.0 and RAMP > 0:
+                n = int(getattr(self, "_pres_step_count", 0))
+                self._pres_step_count = n + 1
+                PRES_W = PRES_W * min(1.0, n / RAMP)
             if PRES_W > 0.0:
                 from ..utils.semantics import vanilla_rgb_reference
                 with torch.no_grad(), vanilla_rgb_reference(

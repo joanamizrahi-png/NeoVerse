@@ -35,6 +35,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_seg_min_px: int = 0,          # 0 = no size filter (default); >0 enables the confetti guard
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
         rgb_preservation_weight: float = 0.0,  # v10 candidate: MSE to the frozen vanilla RGB prediction (0 = off)
+        rgb_preservation_ramp_steps: int = 0,  # v10d: linear ramp of pres weight over first N steps (0 = constant)
         snr_gamma: float = 0.0,                # v10 candidate: min-SNR timestep weighting cap (0 = off)
     ):
         super().__init__()
@@ -103,6 +104,7 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_seg_weight = float(semantic_seg_weight)
             self.pipe.semantic_seg_min_px = int(semantic_seg_min_px)
             self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)
+            self.pipe.rgb_preservation_ramp_steps = int(rgb_preservation_ramp_steps)
             self.pipe.snr_gamma = float(snr_gamma)
             if semantic_seg_weight > 0.0:
                 assert semantic_ce_weight > 0.0, \
@@ -228,6 +230,7 @@ if __name__ == "__main__":
         semantic_seg_weight=float(getattr(args, "semantic_seg_weight", 0.0)),
         semantic_seg_min_px=int(getattr(args, "semantic_seg_min_px", 0)),
         rgb_preservation_weight=float(getattr(args, "rgb_preservation_weight", 0.0)),
+        rgb_preservation_ramp_steps=int(getattr(args, "rgb_preservation_ramp_steps", 0)),
         snr_gamma=float(getattr(args, "snr_gamma", 0.0)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
