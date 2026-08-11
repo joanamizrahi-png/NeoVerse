@@ -102,11 +102,17 @@ def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) ->
     if "semantic_class_head" in by_module and getattr(pipe, "semantic_class_head", None) is None:
         from diffsynth.utils.semantics import SemanticClassHead
         head_state = by_module["semantic_class_head"]
-        final_w = head_state["net.4.weight"]          # [num_classes, hidden, 1, 1]
+        # Reconstruct the head architecture from the state dict: conv weights
+        # live at net.<even index>.weight; the last one is the 1x1 classifier
+        # ([num_classes, hidden, 1, 1]) and the count of 3x3 convs is depth.
+        conv_idx = sorted(int(k.split(".")[1]) for k in head_state if k.endswith(".weight"))
+        final_w = head_state[f"net.{conv_idx[-1]}.weight"]
+        depth = len(conv_idx) - 1
         pipe.semantic_class_head = SemanticClassHead(
-            num_classes=final_w.shape[0], hidden=final_w.shape[1]
+            num_classes=final_w.shape[0], hidden=final_w.shape[1], depth=depth
         ).to(final_w.dtype)
-        print(f"  instantiated semantic_class_head (num_classes={final_w.shape[0]})")
+        print(f"  instantiated semantic_class_head (num_classes={final_w.shape[0]}, "
+              f"hidden={final_w.shape[1]}, depth={depth})")
 
     for name, submodule_state in by_module.items():
         target = getattr(pipe, name, None)

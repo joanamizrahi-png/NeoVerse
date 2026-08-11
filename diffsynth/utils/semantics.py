@@ -423,13 +423,21 @@ class SemanticClassHead(torch.nn.Module):
     it in the final conv's shape (see inference auto-instantiation).
     """
 
-    def __init__(self, num_classes: int = 30, hidden: int = 64):
+    def __init__(self, num_classes: int = 30, hidden: int = 64, depth: int = 2):
         super().__init__()
-        self.net = torch.nn.Sequential(
-            torch.nn.Conv2d(3, hidden, 3, padding=1), torch.nn.ReLU(),
-            torch.nn.Conv2d(hidden, hidden, 3, padding=1), torch.nn.ReLU(),
-            torch.nn.Conv2d(hidden, num_classes, 1),
-        )
+        # depth = number of 3x3 convs before the final 1x1. depth<=2 keeps the
+        # historical all-dilation-1 stack (v8..v10 checkpoints load exactly);
+        # depth>2 grows dilation 1,2,4,... so the receptive field covers a
+        # region rather than a ~5px neighborhood — context to disambiguate
+        # soft color blends (the v10 failure mode of palette-snap).
+        layers, in_ch = [], 3
+        for i in range(depth):
+            dil = 1 if depth <= 2 else 2 ** min(i, 4)
+            layers += [torch.nn.Conv2d(in_ch, hidden, 3, padding=dil, dilation=dil),
+                       torch.nn.ReLU()]
+            in_ch = hidden
+        layers += [torch.nn.Conv2d(hidden, num_classes, 1)]
+        self.net = torch.nn.Sequential(*layers)
 
     def forward(self, x):
         # x: [N, 3, H, W] decoded colorized frames in [-1, 1]; cast to our own

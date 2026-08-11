@@ -36,6 +36,8 @@ class WanTrainingModule(DiffusionTrainingModule):
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
         rgb_preservation_weight: float = 0.0,  # v10 candidate: MSE to the frozen vanilla RGB prediction (0 = off)
         rgb_preservation_ramp_steps: int = 0,  # v10d: linear ramp of pres weight over first N steps (0 = constant)
+        semantic_head_hidden: int = 64,        # v10e: reader head width
+        semantic_head_depth: int = 2,          # v10e: reader head 3x3-conv count (>2 adds dilation ladder)
         snr_gamma: float = 0.0,                # v10 candidate: min-SNR timestep weighting cap (0 = off)
     ):
         super().__init__()
@@ -114,7 +116,9 @@ class WanTrainingModule(DiffusionTrainingModule):
                     "semantic_ce_weight requires semantic_x0_prediction: true"
                 from diffsynth.utils.semantics import SemanticClassHead
                 self.pipe.semantic_class_head = SemanticClassHead(
-                    num_classes=int(num_semantic_classes))
+                    num_classes=int(num_semantic_classes),
+                    hidden=int(semantic_head_hidden),
+                    depth=int(semantic_head_depth))
 
         # Reset training scheduler
         self.pipe.scheduler.set_timesteps(1000, training=True)
@@ -231,6 +235,8 @@ if __name__ == "__main__":
         semantic_seg_min_px=int(getattr(args, "semantic_seg_min_px", 0)),
         rgb_preservation_weight=float(getattr(args, "rgb_preservation_weight", 0.0)),
         rgb_preservation_ramp_steps=int(getattr(args, "rgb_preservation_ramp_steps", 0)),
+        semantic_head_hidden=int(getattr(args, "semantic_head_hidden", 64)),
+        semantic_head_depth=int(getattr(args, "semantic_head_depth", 2)),
         snr_gamma=float(getattr(args, "snr_gamma", 0.0)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
