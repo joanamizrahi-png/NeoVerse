@@ -45,8 +45,12 @@ echo "commit: $(git log --oneline -1)"
 RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 
 # EPOCH env selects the checkpoint; unset -> newest by mtime (the final one).
+# With EPOCH set, the output dir gets an _e${EPOCH} suffix so epoch probes
+# never overwrite the final-checkpoint render of the same clip/trajectory.
+EPSUF=""
 if [[ -n "${EPOCH:-}" ]]; then
     CKPT="$RUNS/checkpoint-epoch-${EPOCH}.safetensors"
+    EPSUF="_e${EPOCH}"
 else
     CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors 2>/dev/null | head -1 || true)
 fi
@@ -61,7 +65,7 @@ if [ "${ANCHOR:-0}" = "1" ]; then
     EXTRA="$EXTRA --anchor_traj $TRAJPT"
     ANCSUF="_ANCHORED"
 fi
-OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}${ANCSUF}"
+OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}${ANCSUF}${EPSUF}"
 mkdir -p "$OUT"
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
