@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=inf-v8-stage
+#SBATCH --job-name=inf-sem
 #SBATCH --account=marlowe-m000204-pm06b
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=/scratch/m000204-pm06b/joana/slurm-inf-v8-stage-%j.out
-#SBATCH --error=/scratch/m000204-pm06b/joana/slurm-inf-v8-stage-%j.err
+#SBATCH --output=/scratch/m000204-pm06b/joana/slurm-inf-sem-%j.out
+#SBATCH --error=/scratch/m000204-pm06b/joana/slurm-inf-sem-%j.err
 
 # v8 stage-1 validation inference: the epoch-5 checkpoint of the x0-prediction
 # run. CRITICAL: --semantic_x0_prediction must be set — v8 checkpoints output
