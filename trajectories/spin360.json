@@ -1,0 +1,12 @@
+{
+  "mode": "relative",
+  "num_frames": 81,
+  "name": "spin360",
+  "keyframes": [
+    {"0":  [{"pan_left": {"angle": 0}}]},
+    {"20": [{"pan_left": {"angle": 90}}]},
+    {"40": [{"pan_left": {"angle": 90}}]},
+    {"60": [{"pan_left": {"angle": 90}}]},
+    {"80": [{"pan_left": {"angle": 90}}]}
+  ]
+}

@@ -30,6 +30,13 @@ CLIP=${CLIP:-rugd_trail_00}
 TRAJ=${TRAJ:-static}   # move_left / pan_left / orbit_left... for off-trajectory probes
 MAG=""
 TRAJARGS=""
+# TRAJ_FILE: explicit trajectory JSON (keyframes or matrices) — needed for
+# true full-circle spins (a 360-deg PRESET is the identity rotation: the
+# interpolator sees "end where you started" and renders a static camera).
+if [ -n "${TRAJ_FILE:-}" ]; then
+    TRAJARGS="$TRAJARGS --trajectory_file $TRAJ_FILE"
+    MAG="_$(basename "$TRAJ_FILE" .json)"
+fi
 if [ -n "${ANGLE:-}" ]; then TRAJARGS="$TRAJARGS --traj_angle $ANGLE"; MAG="${MAG}_a${ANGLE}"; fi
 if [ -n "${DIST:-}" ]; then TRAJARGS="$TRAJARGS --traj_distance $DIST"; MAG="${MAG}_d${DIST}"; fi
 EXTRA=""
