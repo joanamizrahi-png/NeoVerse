@@ -489,3 +489,53 @@ def vanilla_rgb_reference(*module_roots):
             m.enable_adapters(True)
         for m in toggled_split:
             m.vanilla_mode = False
+
+
+# ---------------------------------------------------------------------------
+# Track B (2026-08-15): ANALOG-BITS semantic encoding.
+#
+# The colorize->VAE path represents classes as blendable colors — a soft
+# prediction can land between two classes and decode as a THIRD (the v10
+# palette-snap failure). Analog bits kill that at the root: each class id is
+# 4 binary digits carried in 4 dedicated latent channels as +/-1 values,
+# produced DIRECTLY at latent resolution (no VAE on the semantic slot). A
+# soft bit still rounds to 0 or 1; codes cannot blend into other codes.
+#
+# Resolution contract (matches Wan's video VAE latent grid): spatial /8,
+# temporal 1 + (T-1)/4 (causal: frame 0, then stride-4 groups). Spatial
+# downsampling is MAJORITY-VOTE per 8x8 block (mode pooling), not nearest —
+# thin structures lose either way, but mode is stable and unbiased.
+# ---------------------------------------------------------------------------
+SEMANTIC_BITS = 4          # 2^4 = 16 >= 14 classes
+
+
+def _mode_pool2d(labels: torch.Tensor, stride: int, num_classes: int) -> torch.Tensor:
+    """[T, H, W] int -> [T, H/s, W/s] int by per-block majority vote."""
+    onehot = torch.nn.functional.one_hot(labels.long(), num_classes)  # [T,H,W,K]
+    onehot = onehot.permute(0, 3, 1, 2).float()                       # [T,K,H,W]
+    pooled = torch.nn.functional.avg_pool2d(onehot, stride)           # [T,K,h,w]
+    return pooled.argmax(dim=1)                                       # [T,h,w]
+
+
+def labels_to_analog_bits(labels: torch.Tensor, num_classes: int,
+                          t_causal: bool = True, s_stride: int = 8) -> torch.Tensor:
+    """[T, H, W] int class ids -> [SEMANTIC_BITS, T', H/8, W/8] float in {-1,+1}.
+
+    Channel-first to concat with the RGB latent [16, T', h, w] along dim 0.
+    """
+    if t_causal:
+        idx = [0] + list(range(1, labels.shape[0], 4))                # causal-VAE frame map
+        labels = labels[idx]
+    small = _mode_pool2d(labels, s_stride, num_classes)               # [T',h,w]
+    bits = ((small.unsqueeze(0) >> torch.arange(
+        SEMANTIC_BITS, device=labels.device).view(-1, 1, 1, 1)) & 1)  # [B,T',h,w]
+    return bits.float() * 2.0 - 1.0
+
+
+def analog_bits_to_labels(bits: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """[SEMANTIC_BITS, T', h, w] float -> [T', h, w] int ids (threshold at 0)."""
+    hard = (bits > 0).long()
+    ids = torch.zeros(bits.shape[1:], dtype=torch.long, device=bits.device)
+    for b in range(SEMANTIC_BITS):
+        ids += hard[b] << b
+    return ids.clamp(0, num_classes - 1)
