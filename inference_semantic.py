@@ -259,72 +259,80 @@ def semantic_inference(
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
     semantic_labels: "np.ndarray | None" = None,
     anchor_traj_path: "str | None" = None,  # RGB latent trajectory from a vanilla --save_traj pass
+    _prebuilt_pipe=None,                    # cache_gen: reuse an already-built 30GB pipe across sweeps
 ):
     os.makedirs(output_dir, exist_ok=True)
 
-    # ---- 1. Base pipeline ----
-    lora_path = None
-    if use_lora:
-        lora_path = os.path.join(
-            model_path, "NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors"
-        )
-    print(f"Loading base pipeline from {model_path} ...", flush=True)
-    pipe = WanVideoNeoVersePipeline.from_pretrained(
-        local_model_path=model_path,
-        reconstructor_path=reconstructor_path,
-        lora_path=lora_path,
-        lora_alpha=1.0,
-        device="cuda",
-        torch_dtype=torch.bfloat16,
-    )
-
-    # ---- 2. Semantic expansion (MUST match training-time expansion) ----
-    if not disable_semantic_channels:
-        pipe.semantic_channels = semantic_channels
-        pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+    # cache_gen passes a prebuilt pipe so the 30GB load happens ONCE per
+    # job instead of once per sweep (halves cache-generation cost).
+    if _prebuilt_pipe is not None:
+        pipe = _prebuilt_pipe
         from diffsynth.utils.semantics import set_active_palette
         set_active_palette(int(num_semantic_classes))
-        if semantic_expansion_version == 1:
-            expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
-            if pipe.control_branch is not None:
-                expand_control_branch_for_semantics(pipe.control_branch, extra=semantic_channels)
-        elif semantic_expansion_version == 2:
-            from diffsynth.utils.semantics import (
-                expand_dit_for_semantics_v2,
-                expand_control_branch_for_semantics_v2,
+    else:
+        # ---- 1. Base pipeline ----
+        lora_path = None
+        if use_lora:
+            lora_path = os.path.join(
+                model_path, "NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors"
             )
-            expand_dit_for_semantics_v2(pipe.dit, extra=semantic_channels)
-            if pipe.control_branch is not None:
-                expand_control_branch_for_semantics_v2(pipe.control_branch, extra=semantic_channels)
-        else:
-            raise ValueError(f"unknown semantic_expansion_version={semantic_expansion_version}")
-        print(f"Applied semantic expansion v{semantic_expansion_version} (+{semantic_channels} latent channels)", flush=True)
+        print(f"Loading base pipeline from {model_path} ...", flush=True)
+        pipe = WanVideoNeoVersePipeline.from_pretrained(
+            local_model_path=model_path,
+            reconstructor_path=reconstructor_path,
+            lora_path=lora_path,
+            lora_alpha=1.0,
+            device="cuda",
+            torch_dtype=torch.bfloat16,
+        )
 
-    # ---- 2b. Inject LoRA on DiT to match training. Must happen BEFORE checkpoint load
-    # or the LoRA weights get discarded as unexpected keys.
-    _inject_lora_for_finetune(pipe, rank=lora_rank, target_modules=lora_target_modules)
-    print(f"Injected LoRA slots on DiT (rank {lora_rank}, "
-          f"targets={lora_target_modules or 'default'})", flush=True)
+        # ---- 2. Semantic expansion (MUST match training-time expansion) ----
+        if not disable_semantic_channels:
+            pipe.semantic_channels = semantic_channels
+            pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+            from diffsynth.utils.semantics import set_active_palette
+            set_active_palette(int(num_semantic_classes))
+            if semantic_expansion_version == 1:
+                expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
+                if pipe.control_branch is not None:
+                    expand_control_branch_for_semantics(pipe.control_branch, extra=semantic_channels)
+            elif semantic_expansion_version == 2:
+                from diffsynth.utils.semantics import (
+                    expand_dit_for_semantics_v2,
+                    expand_control_branch_for_semantics_v2,
+                )
+                expand_dit_for_semantics_v2(pipe.dit, extra=semantic_channels)
+                if pipe.control_branch is not None:
+                    expand_control_branch_for_semantics_v2(pipe.control_branch, extra=semantic_channels)
+            else:
+                raise ValueError(f"unknown semantic_expansion_version={semantic_expansion_version}")
+            print(f"Applied semantic expansion v{semantic_expansion_version} (+{semantic_channels} latent channels)", flush=True)
 
-    # ---- 3. Load finetune weights ----
-    _load_finetune_checkpoint(pipe, checkpoint)
+        # ---- 2b. Inject LoRA on DiT to match training. Must happen BEFORE checkpoint load
+        # or the LoRA weights get discarded as unexpected keys.
+        _inject_lora_for_finetune(pipe, rank=lora_rank, target_modules=lora_target_modules)
+        print(f"Injected LoRA slots on DiT (rank {lora_rank}, "
+              f"targets={lora_target_modules or 'default'})", flush=True)
 
-    # ---- 3b. Optional diagnostic: zero the trunk LoRA (--zero_trunk_lora) ----
-    # Hypothesis test for the v6 mottle: the shared attention/FFN LoRA is the ONLY
-    # trained component that touches the RGB path (I/O layers + control branch
-    # base are frozen). Zeroing lora_B reverts the trunk to the pristine merged
-    # base while KEEPING the full-rank _sem I/O modules and control sem conv.
-    #   -> RGB clean + semantic still structured  = drop/tame trunk LoRA (v8)
-    #   -> RGB clean + semantic collapses         = trunk routing is needed; tune
-    #      its LR/rank instead of removing it.
-    if zero_trunk_lora:
-        n_zeroed = 0
-        with torch.no_grad():
-            for name, param in pipe.dit.named_parameters():
-                if "lora_B" in name:
-                    param.zero_()
-                    n_zeroed += 1
-        print(f"[zero_trunk_lora] zeroed {n_zeroed} lora_B tensors — trunk = pristine base", flush=True)
+        # ---- 3. Load finetune weights ----
+        _load_finetune_checkpoint(pipe, checkpoint)
+
+        # ---- 3b. Optional diagnostic: zero the trunk LoRA (--zero_trunk_lora) ----
+        # Hypothesis test for the v6 mottle: the shared attention/FFN LoRA is the ONLY
+        # trained component that touches the RGB path (I/O layers + control branch
+        # base are frozen). Zeroing lora_B reverts the trunk to the pristine merged
+        # base while KEEPING the full-rank _sem I/O modules and control sem conv.
+        #   -> RGB clean + semantic still structured  = drop/tame trunk LoRA (v8)
+        #   -> RGB clean + semantic collapses         = trunk routing is needed; tune
+        #      its LR/rank instead of removing it.
+        if zero_trunk_lora:
+            n_zeroed = 0
+            with torch.no_grad():
+                for name, param in pipe.dit.named_parameters():
+                    if "lora_B" in name:
+                        param.zero_()
+                        n_zeroed += 1
+            print(f"[zero_trunk_lora] zeroed {n_zeroed} lora_B tensors — trunk = pristine base", flush=True)
 
     # ---- 4. Load input video ----
     print(f"Loading input video: {input_path}", flush=True)
@@ -556,6 +564,7 @@ def semantic_inference(
     labels_out = os.path.join(output_dir, "semantic_labels.npz")
     np.savez_compressed(labels_out, labels=labels, num_classes=NUM_CLASSES)
     print(f"Saved raw class ids: {labels_out}", flush=True)
+    return pipe
 
 
 def parse_args():
@@ -612,6 +621,11 @@ def parse_args():
     p.add_argument("--semantic_labels", default=None,
                    help="Path to SAM3 label .npz (from sam3_precompute_labels.py). "
                         "If omitted, auto-looks for outputs/sam3_labels/<input-stem>.npz")
+    p.add_argument("--sweep_manifest", default=None,
+                   help="ribbon_traj/<scene>/manifest.json — batch mode: render a RANGE of "
+                        "sweeps with ONE pipeline load (use with --sweeps and --cache_out)")
+    p.add_argument("--sweeps", default=None, help="a-b or a: manifest indices to render (batch mode)")
+    p.add_argument("--cache_out", default=None, help="ribbon_cache/<scene> output root (batch mode)")
     p.add_argument("--anchor_traj", default=None,
                    help="RGB latent trajectory .pt from a vanilla inference.py --save_traj pass. "
                         "Overrides the RGB latent half with the vanilla trajectory at every "
@@ -636,6 +650,47 @@ def main():
     if labels_path is not None:
         semantic_labels = np.load(labels_path)["labels"]
         print(f"Loaded semantic labels from {labels_path}: {semantic_labels.shape}", flush=True)
+
+    if args.sweep_manifest:
+        # ---- ribbon-cache batch mode: one pipe, many sweeps ----
+        import json
+        mdir = os.path.dirname(args.sweep_manifest)
+        manifest = json.load(open(args.sweep_manifest))
+        lo, _, hi = args.sweeps.partition("-")
+        lo, hi = int(lo), int(hi or lo)
+        pipe = None
+        for idx in range(lo, hi + 1):
+            sw = manifest["sweeps"][idx]
+            name = sw["file"][:-5]
+            out = os.path.join(args.cache_out, name)
+            if (os.path.exists(os.path.join(out, "semantic_labels.npz"))
+                    and os.path.exists(os.path.join(out, "alpha.npz"))):
+                print(f"==> [{idx}] {name} already cached, skipping", flush=True)
+                continue
+            print(f"==> [{idx}] rendering {name}", flush=True)
+            pipe = semantic_inference(
+                input_path=args.input_path,
+                checkpoint=args.checkpoint,
+                output_dir=out,
+                model_path=args.model_path,
+                reconstructor_path=args.reconstructor_path,
+                trajectory_file=os.path.join(mdir, sw["file"]),
+                num_frames=args.num_frames, width=args.width, height=args.height,
+                resize_mode=args.resize_mode, seed=args.seed,
+                use_lora=not args.disable_lora, static_scene=args.static_scene,
+                semantic_channels=args.semantic_channels,
+                semantic_expansion_version=args.semantic_expansion_version,
+                semantic_x0_prediction=args.semantic_x0_prediction,
+                num_semantic_classes=args.num_semantic_classes,
+                decode_with_head=args.decode_with_head,
+                lora_rank=args.lora_rank,
+                lora_target_modules=(args.lora_target_modules.split(",")
+                                     if args.lora_target_modules else None),
+                semantic_labels=semantic_labels,
+                _prebuilt_pipe=pipe,
+            )
+        print(f"==> batch done: sweeps {args.sweeps}", flush=True)
+        return
 
     semantic_inference(
         input_path=args.input_path,
