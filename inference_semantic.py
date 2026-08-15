@@ -444,6 +444,17 @@ def semantic_inference(
                     ffmpeg_params=["-pix_fmt", "yuv420p"])
         print(f"Saved holey semantic hint: {holey_out}", flush=True)
 
+    # Rough (undiffused) raster RGB — the pre-diffusion view whose black
+    # regions show exactly which pixels the diffusion will invent. Saved so
+    # hallucination-visibility grids get voids directly, not via the hint.
+    import imageio.v3 as _iio
+    os.makedirs(output_dir, exist_ok=True)
+    rough = (target_rgb[0].detach().float().cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+    rough_out = os.path.join(output_dir, "rough_rgb.mp4")
+    _iio.imwrite(rough_out, rough, fps=16, codec="libx264", macro_block_size=1,
+                 ffmpeg_params=["-pix_fmt", "yuv420p"])
+    print(f"Saved rough raster RGB: {rough_out}", flush=True)
+
     wrapped_data = {
         "source_views": views,
         "target_rgb": target_rgb,
