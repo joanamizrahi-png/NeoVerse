@@ -35,6 +35,9 @@ if [ -n "${DIST:-}" ]; then TRAJARGS="$TRAJARGS --traj_distance $DIST"; MAG="${M
 EXTRA=""
 DECSUF=""
 if [ "${HEAD_DECODE:-0}" = "1" ]; then EXTRA="--decode_with_head"; DECSUF="_head"; fi
+# BITS=1: render an analog-bits checkpoint (v13+) — 4 semantic channels,
+# threshold decode built in (no reader head, no palette snap).
+if [ "${BITS:-0}" = "1" ]; then EXTRA="$EXTRA --semantic_channels 4"; DECSUF="${DECSUF}_bits"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models

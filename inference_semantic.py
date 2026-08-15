@@ -148,6 +148,11 @@ def _make_dual_decode(orig_decode, sink: dict):
     the pipeline's own return value stays unchanged.
     """
     def decode(latents, **kwargs):
+        if latents.shape[1] == 20:
+            # Track B (analog bits): 16 RGB latent channels + 4 bit channels.
+            # Bits are NOT VAE-decodable — stash them raw for threshold decode.
+            sink["sem_bits"] = latents[:, 16:].detach()
+            return orig_decode(latents[:, :16], **kwargs)
         if latents.shape[1] == 32:
             rgb_latents = latents[:, :16]
             sem_latents = latents[:, 16:]
@@ -528,6 +533,30 @@ def semantic_inference(
     print(f"Saved RGB output: {rgb_out}", flush=True)
 
     # ---- 10. Post-process semantic output ----
+    if "sem_bits" in sink:
+        # Track B decode: threshold bits -> class ids at latent resolution,
+        # then nearest-upsample x8 spatially and expand the causal temporal
+        # grid (frame 0, then each latent frame covers 4 video frames).
+        from diffsynth.utils.semantics import analog_bits_to_labels
+        bits = sink["sem_bits"][0].float().cpu()               # [4, T', h, w]
+        ids_lat = analog_bits_to_labels(bits, NUM_CLASSES)     # [T', h, w]
+        ids_full = torch.repeat_interleave(
+            torch.repeat_interleave(ids_lat, 8, dim=1), 8, dim=2)
+        t_map = [0] + [1 + (t - 1) // 4 for t in range(1, len(target_cam2world))]
+        t_map = [min(t, ids_full.shape[0] - 1) for t in t_map]
+        labels = ids_full[t_map].numpy().astype(np.int8)       # [T, H, W]
+        palette = (get_active_palette().detach().cpu().float() * 255).clamp_(0, 255).to(torch.uint8).numpy()
+        sem_rgb = palette[np.clip(labels, 0, NUM_CLASSES - 1)]
+        import imageio.v3 as iio
+        iio.imwrite(os.path.join(output_dir, "semantic.mp4"), sem_rgb, fps=16,
+                    codec="libx264", macro_block_size=1,
+                    ffmpeg_params=["-pix_fmt", "yuv420p"])
+        np.savez_compressed(os.path.join(output_dir, "semantic_labels.npz"),
+                            labels=labels, num_classes=NUM_CLASSES)
+        print(f"Saved ANALOG-BITS semantics: {output_dir}/semantic.mp4 + semantic_labels.npz "
+              f"(threshold decode, latent-res x8 nearest-upsample)", flush=True)
+        return pipe
+
     if "sem_video" not in sink:
         print("WARNING: no semantic output captured -- was the model actually finetuned "
               "with semantic_channels? Skipping semantic save.", flush=True)
