@@ -235,6 +235,7 @@ def semantic_inference(
     model_path: str,
     reconstructor_path: str,
     trajectory: str = "static",
+    trajectory_file: "str | None" = None,  # explicit c2w JSON (ribbon-cache sweeps); overrides `trajectory`
     prompt: str = "A smooth video with complete scene content. Inpaint any missing regions or margins naturally to match the surrounding scene.",
     negative_prompt: str = "",
     num_frames: int = 81,
@@ -336,10 +337,18 @@ def semantic_inference(
     print(f"  {len(images)} frames at {images[0].size}", flush=True)
 
     # ---- 5. Build camera trajectory ----
-    cam_traj = CameraTrajectory.from_predefined(
-        trajectory, num_frames=len(images), mode="relative",
-        angle=traj_angle, distance=traj_distance,
-    )
+    # trajectory_file (ribbon-cache sweeps): a JSON of explicit c2w matrices,
+    # typically mode="global" in the RECON frame — used verbatim, which is how
+    # the cache generator drives arbitrary ribbon poses through this renderer.
+    if trajectory_file is not None:
+        cam_traj = CameraTrajectory.from_json(trajectory_file)
+        print(f"Trajectory from file: {trajectory_file} "
+              f"({len(cam_traj)} poses, mode={cam_traj.mode})", flush=True)
+    else:
+        cam_traj = CameraTrajectory.from_predefined(
+            trajectory, num_frames=len(images), mode="relative",
+            angle=traj_angle, distance=traj_distance,
+        )
 
     # ---- 6. Reconstruct + render (same as inference.py) ----
     device = pipe.device
@@ -454,6 +463,12 @@ def semantic_inference(
     _iio.imwrite(rough_out, rough, fps=16, codec="libx264", macro_block_size=1,
                  ffmpeg_params=["-pix_fmt", "yuv420p"])
     print(f"Saved rough raster RGB: {rough_out}", flush=True)
+    # Per-pixel real-geometry mask (True = real Gaussians behind this pixel,
+    # False = the diffusion invents here). The ribbon-cache reward reads
+    # diffused labels ONLY where this is True.
+    alpha_np = target_mask[0].detach().bool().cpu().numpy()
+    np.savez_compressed(os.path.join(output_dir, "alpha.npz"), alpha=alpha_np)
+    print(f"Saved alpha mask: {os.path.join(output_dir, 'alpha.npz')}", flush=True)
 
     wrapped_data = {
         "source_views": views,
@@ -552,6 +567,8 @@ def parse_args():
     p.add_argument("--model_path", default="models",
                    help="Base NeoVerse model directory (has NeoVerse/*.safetensors + reconstructor.ckpt)")
     p.add_argument("--reconstructor_path", default="models/NeoVerse/reconstructor.ckpt")
+    p.add_argument("--trajectory_file", default=None,
+                   help="JSON of explicit c2w matrices (ribbon-cache sweeps); overrides --trajectory")
     p.add_argument("--trajectory", default="static",
                    choices=["pan_left", "pan_right", "tilt_up", "tilt_down",
                             "move_left", "move_right", "push_in", "pull_out",
@@ -627,6 +644,7 @@ def main():
         model_path=args.model_path,
         reconstructor_path=args.reconstructor_path,
         trajectory=args.trajectory,
+        trajectory_file=args.trajectory_file,
         prompt=args.prompt,
         negative_prompt=args.negative_prompt,
         num_frames=args.num_frames,
