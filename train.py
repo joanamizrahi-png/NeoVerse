@@ -39,6 +39,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_head_hidden: int = 64,        # v10e: reader head width
         semantic_head_depth: int = 2,          # v10e: reader head 3x3-conv count (>2 adds dilation ladder)
         snr_gamma: float = 0.0,                # v10 candidate: min-SNR timestep weighting cap (0 = off)
+        semantic_analog_bits: bool = False,    # Track B: 4-bit class codes at latent res replace colorize+VAE (semantic_channels must be 4)
     ):
         super().__init__()
         # Load models. If distill_lora_path is set, the distill LoRA is merged
@@ -108,10 +109,17 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)
             self.pipe.rgb_preservation_ramp_steps = int(rgb_preservation_ramp_steps)
             self.pipe.snr_gamma = float(snr_gamma)
+            self.pipe.semantic_analog_bits = bool(semantic_analog_bits)
+            if semantic_analog_bits:
+                assert semantic_channels == 4, \
+                    "analog bits carries 4 channels; set semantic_channels: 4"
+                assert semantic_x0_prediction, \
+                    "analog bits requires x0-prediction (bits are targets, not velocities)"
             if semantic_seg_weight > 0.0:
                 assert semantic_ce_weight > 0.0, \
                     "semantic_seg_weight rides the CE head's decoded logits; set semantic_ce_weight too"
-            if semantic_ce_weight > 0.0:
+            if semantic_ce_weight > 0.0 and not semantic_analog_bits:
+                # (analog-bits CE lives at latent resolution and needs no head)
                 assert semantic_x0_prediction, \
                     "semantic_ce_weight requires semantic_x0_prediction: true"
                 from diffsynth.utils.semantics import SemanticClassHead
@@ -238,6 +246,7 @@ if __name__ == "__main__":
         semantic_head_hidden=int(getattr(args, "semantic_head_hidden", 64)),
         semantic_head_depth=int(getattr(args, "semantic_head_depth", 2)),
         snr_gamma=float(getattr(args, "snr_gamma", 0.0)),
+        semantic_analog_bits=bool(getattr(args, "semantic_analog_bits", False)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make

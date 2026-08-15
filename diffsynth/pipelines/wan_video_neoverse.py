@@ -232,7 +232,50 @@ class WanVideoNeoVersePipeline(BasePipeline):
         CE_W = float(getattr(self, "semantic_ce_weight", 0.0))
         head = getattr(self, "semantic_class_head", None)
         sem_labels = inputs.get("semantic_labels", None)
-        if (CE_W > 0.0 and head is not None and C > 16 and sem_labels is not None
+
+        # Track B (analog bits): CE lives at LATENT resolution — logits are the
+        # negative squared distances from the predicted bit vector to each
+        # class's binary code; GT is the mode-pooled label map on the same
+        # grid. No VAE decode, no reader head, every latent frame supervised.
+        if (getattr(self, "semantic_analog_bits", False) and CE_W > 0.0
+                and C > 16 and sem_labels is not None
+                and getattr(self, "semantic_x0_prediction", False)):
+            from ..utils.semantics import (_mode_pool2d, get_active_palette,
+                                           SEMANTIC_BITS)
+            K = get_active_palette().shape[0]
+            codes = ((torch.arange(K, device=noise_pred.device).unsqueeze(1)
+                      >> torch.arange(SEMANTIC_BITS, device=noise_pred.device))
+                     & 1).float() * 2.0 - 1.0                      # [K, BITS]
+            x0_bits = noise_pred[:, 16:].float()                    # [B, BITS, T', h, w]
+            logits = -((x0_bits.unsqueeze(1)
+                        - codes.view(1, K, SEMANTIC_BITS, 1, 1, 1)) ** 2).sum(2)  # [B,K,T',h,w]
+            Tt = x0_bits.shape[2]
+            idx = [0] + list(range(1, sem_labels.shape[1], 4))
+            gt_lat = torch.stack([
+                _mode_pool2d(sem_labels[b, idx].long(), 8, K)
+                for b in range(sem_labels.shape[0])
+            ])[:, :Tt]                                              # [B, T', h, w]
+            ce = torch.nn.functional.cross_entropy(
+                logits[:, :, :gt_lat.shape[1]].flatten(2).transpose(1, 2).reshape(-1, K),
+                gt_lat.flatten().to(logits.device))
+            loss = loss + CE_W * ce
+            if self._last_split_loss is not None:
+                self._last_split_loss["semantic_ce"] = float(ce.detach())
+            SEG_W = float(getattr(self, "semantic_seg_weight", 0.0))
+            segs = inputs.get("semantic_segments", None)
+            if SEG_W > 0.0 and segs is not None:
+                seg_lat = segs[:, idx][:, :Tt, ::8, ::8].reshape(
+                    -1, *gt_lat.shape[-2:]).long().to(logits.device)
+                probs = torch.nn.functional.softmax(
+                    logits[:, :, :gt_lat.shape[1]], dim=1)
+                probs = probs.transpose(1, 2).reshape(-1, K, *gt_lat.shape[-2:])
+                seg_l = _segment_homogeneity_loss(
+                    probs, seg_lat, gt=gt_lat.reshape(-1, *gt_lat.shape[-2:]).to(logits.device),
+                    min_px=int(getattr(self, "semantic_seg_min_px", 0)))
+                loss = loss + SEG_W * seg_l
+                if self._last_split_loss is not None:
+                    self._last_split_loss["semantic_seg"] = float(seg_l.detach())
+        elif (CE_W > 0.0 and head is not None and C > 16 and sem_labels is not None
                 and getattr(self, "semantic_x0_prediction", False)):
             t_id = torch.argmin((self.scheduler.timesteps.to(timestep.device)
                                  - timestep).abs())
@@ -1168,15 +1211,25 @@ class WanVideoUnit_4DEmbedder(PipelineUnit):
             # This gives the control branch a matching semantic conditioning channel.
             target_semantic_latents = None
             if getattr(pipe, "semantic_channels", 0) > 0 and target_semantic is not None:
-                from ..utils.semantics import labels_to_rgb
-                # target_semantic: [B, T, H, W] int class ids
-                sem_rgb = labels_to_rgb(target_semantic)                     # [B, T, H, W, 3] in [0,1]
-                sem_rgb = rearrange(sem_rgb, "B T H W C -> B T C H W")
-                sem_rgb = pipe.preprocess_video(sem_rgb)
-                target_semantic_latents = pipe.vae.encode(
-                    sem_rgb, device=pipe.device,
-                    tiled=tiled, tile_size=tile_size, tile_stride=tile_stride,
-                ).to(dtype=pipe.torch_dtype, device=pipe.device)
+                if getattr(pipe, "semantic_analog_bits", False):
+                    # Track B: classes as 4 binary channels at latent resolution —
+                    # no VAE on the semantic slot, codes cannot blend.
+                    from ..utils.semantics import labels_to_analog_bits, get_active_palette
+                    K = get_active_palette().shape[0]
+                    target_semantic_latents = torch.stack([
+                        labels_to_analog_bits(target_semantic[b], K)
+                        for b in range(target_semantic.shape[0])
+                    ]).to(dtype=pipe.torch_dtype, device=pipe.device)
+                else:
+                    from ..utils.semantics import labels_to_rgb
+                    # target_semantic: [B, T, H, W] int class ids
+                    sem_rgb = labels_to_rgb(target_semantic)                     # [B, T, H, W, 3] in [0,1]
+                    sem_rgb = rearrange(sem_rgb, "B T H W C -> B T C H W")
+                    sem_rgb = pipe.preprocess_video(sem_rgb)
+                    target_semantic_latents = pipe.vae.encode(
+                        sem_rgb, device=pipe.device,
+                        tiled=tiled, tile_size=tile_size, tile_stride=tile_stride,
+                    ).to(dtype=pipe.torch_dtype, device=pipe.device)
 
             return {
                 "target_rgb": target_rgb_latents,
@@ -1233,10 +1286,18 @@ class WanVideoUnit_InputVideoEmbedder(PipelineUnit):
         # so the DiT GENERATES [RGB ; semantic] jointly. (See docs/FINETUNE_IMPLEMENTATION.md)
         if getattr(pipe, "semantic_channels", 0) > 0 and semantic_labels is not None:
             from ..utils.semantics import labels_to_rgb
-            sem_rgb = labels_to_rgb(semantic_labels).permute(0, 1, 4, 2, 3)   # [B,T,H,W]->[B,T,3,H,W]
-            sem_rgb = pipe.preprocess_video(sem_rgb)
-            sem_latents = pipe.vae.encode(sem_rgb, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
-            input_latents = torch.cat([input_latents, sem_latents], dim=1)    # [B,16,..]->[B,32,..]
+            if getattr(pipe, "semantic_analog_bits", False):
+                from ..utils.semantics import labels_to_analog_bits, get_active_palette
+                K = get_active_palette().shape[0]
+                sem_latents = torch.stack([
+                    labels_to_analog_bits(semantic_labels[b], K)
+                    for b in range(semantic_labels.shape[0])
+                ]).to(dtype=pipe.torch_dtype, device=pipe.device)
+            else:
+                sem_rgb = labels_to_rgb(semantic_labels).permute(0, 1, 4, 2, 3)   # [B,T,H,W]->[B,T,3,H,W]
+                sem_rgb = pipe.preprocess_video(sem_rgb)
+                sem_latents = pipe.vae.encode(sem_rgb, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
+            input_latents = torch.cat([input_latents, sem_latents], dim=1)    # 16 + sem_channels
         if pipe.scheduler.training:
             return {"latents": noise, "input_latents": input_latents}
         else:
