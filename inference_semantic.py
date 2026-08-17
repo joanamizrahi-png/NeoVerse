@@ -34,7 +34,7 @@ NOTE: THIS SCRIPT HAS NOT YET BEEN RUNTIME-TESTED. The state-dict loading path a
 the VAE-decode monkey-patch are the two most likely places to hit issues. See the
 inline comments at those spots for what to check if it errors.
 """
-import argparse, os
+import argparse, json, os
 import numpy as np
 import torch
 from safetensors.torch import load_file
@@ -423,11 +423,25 @@ def semantic_inference(
         target_cam2world = input_cam2world @ target_cam2world
     target_world2cam = homo_matrix_inverse(target_cam2world)
 
+    # Scene-time for each target pose. Default: input clock (pose i at
+    # timestamp i) — correct for path-threaded sweeps and presets. But a
+    # trajectory file may pin poses to explicit source frames via
+    # frame_indices (e.g. SPIN sweeps: 81 poses all at the anchor frame's
+    # timestamp). Ignoring them rendered spins against a running clock —
+    # alpha 5% at a pose where the path sweep saw 97% (caught 2026-08-17).
+    target_timestamps = timestamps
+    if trajectory_file is not None:
+        with open(trajectory_file) as _f:
+            _fi = json.load(_f).get("trajectory", {}).get("frame_indices")
+        if _fi is not None and len(_fi) == len(cam_traj):
+            target_timestamps = timestamps[
+                torch.as_tensor(_fi, dtype=torch.long, device=timestamps.device)]
+
     target_rgb, target_depth, target_alpha = pipe.reconstructor.gs_renderer.rasterizer.forward(
         gaussians,
         render_viewmats=[target_world2cam],
         render_Ks=[K_zoomed],
-        render_timestamps=[timestamps],
+        render_timestamps=[target_timestamps],
         sh_degree=0, width=width, height=height,
     )
     target_mask = (target_alpha > alpha_threshold).float()
@@ -448,7 +462,7 @@ def semantic_inference(
             gaussians,
             render_viewmats=[target_world2cam],
             render_Ks=[K_zoomed],
-            render_timestamps=[timestamps],
+            render_timestamps=[target_timestamps],
             sh_degree=0, width=width, height=height,
             feature="labels",
         )
