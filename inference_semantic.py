@@ -479,7 +479,11 @@ def semantic_inference(
     # Per-pixel real-geometry mask (True = real Gaussians behind this pixel,
     # False = the diffusion invents here). The ribbon-cache reward reads
     # diffused labels ONLY where this is True.
-    alpha_np = target_mask[0].detach().bool().cpu().numpy()
+    # NOT target_mask: that uses the CONDITIONING threshold (default 1.0),
+    # which a [0,1] alpha never exceeds — it produced an all-False mask
+    # (caught at gate 2, 2026-08-16: rough render 65% real, mask said 0%).
+    # 0.5 = "mostly real geometry behind this pixel".
+    alpha_np = (target_alpha[0].detach().float().cpu().numpy() > 0.5).squeeze(-1)
     np.savez_compressed(os.path.join(output_dir, "alpha.npz"), alpha=alpha_np)
     print(f"Saved alpha mask: {os.path.join(output_dir, 'alpha.npz')}", flush=True)
 
