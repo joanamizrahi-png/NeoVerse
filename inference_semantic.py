@@ -726,6 +726,8 @@ def main():
                 lora_target_modules=(args.lora_target_modules.split(",")
                                      if args.lora_target_modules else None),
                 semantic_labels=semantic_labels,
+                prompt=args.prompt,
+                negative_prompt=args.negative_prompt,
                 _prebuilt_pipe=pipe,
             )
         print(f"==> batch done: sweeps {args.sweeps}", flush=True)
