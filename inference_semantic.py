@@ -261,6 +261,7 @@ def semantic_inference(
     traj_distance: "float | None" = None,  # move/push magnitude in scene units (None = preset default)
     lora_rank: int = 32,                   # match training config's lora_rank
     lora_target_modules: "list[str] | None" = None,  # match training's list; None -> default
+    semantic_analog_bits: bool = False,    # Track B ckpts: 4-bit codes on the semantic slot (hint + decode)
     zero_trunk_lora: bool = False,         # diagnostic: zero attention/FFN LoRA after load
     semantic_labels: "np.ndarray | None" = None,
     anchor_traj_path: "str | None" = None,  # RGB latent trajectory from a vanilla --save_traj pass
@@ -272,6 +273,7 @@ def semantic_inference(
     # job instead of once per sweep (halves cache-generation cost).
     if _prebuilt_pipe is not None:
         pipe = _prebuilt_pipe
+        pipe.semantic_analog_bits = bool(semantic_analog_bits)
         from diffsynth.utils.semantics import set_active_palette
         set_active_palette(int(num_semantic_classes))
     else:
@@ -295,6 +297,7 @@ def semantic_inference(
         if not disable_semantic_channels:
             pipe.semantic_channels = semantic_channels
             pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
+            pipe.semantic_analog_bits = bool(semantic_analog_bits)
             from diffsynth.utils.semantics import set_active_palette
             set_active_palette(int(num_semantic_classes))
             if semantic_expansion_version == 1:
@@ -643,6 +646,9 @@ def parse_args():
     p.add_argument("--semantic_x0_prediction", action="store_true",
                    help="Must match training: v8 checkpoints REQUIRE this "
                         "(sem half outputs the clean latent); v6/v7 must omit it")
+    p.add_argument("--semantic_analog_bits", action="store_true",
+                   help="Track B checkpoints: semantic slot is 4 analog-bit channels "
+                        "(hint encoded as bits, output threshold-decoded)")
     p.add_argument("--zero_trunk_lora", action="store_true",
                    help="Diagnostic: zero the attention/FFN LoRA after checkpoint load. "
                         "Isolates trunk-LoRA drift as the mottle source (see 3b comment).")
@@ -752,6 +758,7 @@ def main():
         lora_rank=args.lora_rank,
         lora_target_modules=(args.lora_target_modules.split(",")
                              if args.lora_target_modules else None),
+        semantic_analog_bits=args.semantic_analog_bits,
         zero_trunk_lora=args.zero_trunk_lora,
         semantic_labels=semantic_labels,
         anchor_traj_path=args.anchor_traj,
