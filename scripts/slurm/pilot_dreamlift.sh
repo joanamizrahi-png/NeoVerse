@@ -29,7 +29,8 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 echo "commit: $(git log --oneline -1)"
 
 RUNS=/scratch/m000204-pm06b/joana/runs/train_semantic_v10
-CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors | head -1)
+CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors 2>/dev/null | head -1 || true)
+[ -f "$CKPT" ] || { echo "FATAL: no v10 checkpoint under $RUNS"; exit 1; }
 DREAM=/scratch/m000204-pm06b/joana/outputs/ribbon_cache_spin/rugd_trail_00/spin_f40_lat+0.00
 TRAJ=/scratch/m000204-pm06b/joana/outputs/ribbon_traj_spin/rugd_trail_00
 OUTROOT=/scratch/m000204-pm06b/joana/outputs/dreamlift_pilot
