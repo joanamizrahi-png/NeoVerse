@@ -301,7 +301,11 @@ class WorldMirror(nn.Module, PyTorchModelHubMixin):
             gs_feat, gs_depth, gs_depth_conf = self.gs_head(
                 context_preds.get("token_list", token_list),
                 images=context_preds.get("imgs", imgs),
-                patch_start_idx=patch_start_idx
+                patch_start_idx=patch_start_idx,
+                # chunked = numerically identical, memory-bounded; without this
+                # the head allocates for ALL views at once and OOMs beyond ~81
+                # (dream-lift appends generated views past the trained count)
+                frames_chunk_size=32,
             )
             preds["gs_depth"] = gs_depth
             preds["gs_depth_conf"] = gs_depth_conf
