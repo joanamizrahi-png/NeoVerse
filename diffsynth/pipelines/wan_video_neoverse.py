@@ -563,6 +563,13 @@ class WanVideoNeoVersePipeline(BasePipeline):
         #   semantic channels denoise conditioned on the vanilla RGB trajectory.
         latent_traj_sink: Optional[list] = None,
         rgb_anchor_traj: Optional[torch.Tensor] = None,
+        # SEQUENTIAL-OVERLAP chaining (docs/DREAM_CONSISTENCY_DESIGNS.md, design 2):
+        # clean latents [B, C, L_lat, h, w] for the first L_lat latent frames,
+        # encoded from the PREVIOUS call's output. Inpainting-style hard
+        # conditioning: re-imposed at the matching noise level at init and after
+        # every scheduler step, so temporal attention propagates the previous
+        # call's dream into the new frames. Distill-safe (no sigma surgery).
+        overlap_seed_latents: Optional[torch.Tensor] = None,
     ):
         # Scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
@@ -602,6 +609,16 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 device=inputs_shared["latents"].device, dtype=inputs_shared["latents"].dtype)
         if latent_traj_sink is not None:
             latent_traj_sink.append(inputs_shared["latents"][:, :16].detach().to("cpu", torch.bfloat16).clone())
+        seed_noise = None
+        if overlap_seed_latents is not None:
+            lat = inputs_shared["latents"]
+            L = overlap_seed_latents.shape[2]
+            assert overlap_seed_latents.shape[1] == lat.shape[1], (
+                f"seed channels {overlap_seed_latents.shape[1]} != latent channels {lat.shape[1]}")
+            overlap_seed_latents = overlap_seed_latents.to(device=lat.device, dtype=lat.dtype)
+            seed_noise = torch.randn_like(overlap_seed_latents)
+            lat[:, :, :L] = self.scheduler.add_noise(
+                overlap_seed_latents, seed_noise, timestep=self.scheduler.timesteps[0])
         self.load_models_to_device(self.in_iteration_models)
         models = {name: getattr(self, name) for name in self.in_iteration_models}
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
@@ -633,6 +650,15 @@ class WanVideoNeoVersePipeline(BasePipeline):
             if rgb_anchor_traj is not None:
                 inputs_shared["latents"][:, :16] = rgb_anchor_traj[progress_id + 1].to(
                     device=inputs_shared["latents"].device, dtype=inputs_shared["latents"].dtype)
+            if overlap_seed_latents is not None:
+                L = overlap_seed_latents.shape[2]
+                if progress_id + 1 < len(self.scheduler.timesteps):
+                    inputs_shared["latents"][:, :, :L] = self.scheduler.add_noise(
+                        overlap_seed_latents, seed_noise,
+                        timestep=self.scheduler.timesteps[progress_id + 1])
+                else:
+                    # final state: exactly the clean seed
+                    inputs_shared["latents"][:, :, :L] = overlap_seed_latents
             if latent_traj_sink is not None:
                 latent_traj_sink.append(inputs_shared["latents"][:, :16].detach().to("cpu", torch.bfloat16).clone())
 

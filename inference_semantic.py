@@ -254,6 +254,8 @@ def semantic_inference(
     static_scene: bool = False,
     append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
     append_views_timestamp: int = 40,      # scene-time the appended dream commits to
+    chain_seed_dir: str = None,            # CHAIN: previous call's output dir to seed from
+    chain_overlap: int = 9,                # video frames to seed (1+4k)
     semantic_channels: int = 16,
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
@@ -570,6 +572,40 @@ def semantic_inference(
         rgb_anchor_traj = blob["traj"]
         print(f"ANCHORED RGB: overriding RGB latents with vanilla trajectory from "
               f"{anchor_traj_path} ({rgb_anchor_traj.shape[0]} states)", flush=True)
+    # SEQUENTIAL-OVERLAP chaining (design 2): encode the previous call's first
+    # chain_overlap output frames (+labels) as clean latents; the pipe hard-
+    # conditions the matching latent frames on them every denoise step.
+    overlap_seed_latents = None
+    if chain_seed_dir is not None:
+        assert not getattr(pipe, "semantic_analog_bits", False), \
+            "chaining not implemented for analog-bits checkpoints"
+        assert (chain_overlap - 1) % 4 == 0, "chain_overlap must be 1+4k video frames"
+        from PIL import Image as _PILImage
+        import cv2 as _cv2
+        cap = _cv2.VideoCapture(os.path.join(chain_seed_dir, "rgb.mp4"))
+        prev = []
+        while len(prev) < chain_overlap:
+            ok, f = cap.read()
+            if not ok:
+                break
+            prev.append(f[:, :, ::-1])
+        cap.release()
+        assert len(prev) == chain_overlap, f"seed video shorter than {chain_overlap}"
+        seed_pil = [_PILImage.fromarray(f).resize((width, height)) for f in prev]
+        sv = pipe.preprocess_video(seed_pil)
+        seed_rgb_lat = pipe.vae.encode(sv, device=pipe.device, tiled=False).to(
+            dtype=pipe.torch_dtype, device=pipe.device)
+        plab = np.load(os.path.join(chain_seed_dir, "semantic_labels.npz"))["labels"][:chain_overlap]
+        from diffsynth.utils.semantics import labels_to_rgb as _l2rgb
+        lab_t = torch.as_tensor(plab.astype(np.int64), device=pipe.device).unsqueeze(0)
+        sem_rgb = _l2rgb(lab_t).permute(0, 1, 4, 2, 3)
+        sem_rgb = pipe.preprocess_video(sem_rgb)
+        seed_sem_lat = pipe.vae.encode(sem_rgb, device=pipe.device, tiled=False).to(
+            dtype=pipe.torch_dtype, device=pipe.device)
+        overlap_seed_latents = torch.cat([seed_rgb_lat, seed_sem_lat], dim=1)
+        print(f"CHAIN SEED: {chain_overlap} frames from {chain_seed_dir} -> "
+              f"latents {tuple(overlap_seed_latents.shape)}", flush=True)
+
     print(f"Running diffusion ({num_inference_steps} steps, cfg={cfg_scale}) ...", flush=True)
     generated_frames = pipe(
         prompt=prompt,
@@ -578,6 +614,7 @@ def semantic_inference(
         height=height, width=width, num_frames=len(target_cam2world),
         cfg_scale=cfg_scale, num_inference_steps=num_inference_steps, tiled=False,
         rgb_anchor_traj=rgb_anchor_traj,
+        overlap_seed_latents=overlap_seed_latents,
         **wrapped_data,
     )
 
@@ -684,6 +721,10 @@ def parse_args():
                    help="DREAM LIFT pilot: dir with a generated sweep's rgb.mp4 "
                         "(+semantic_labels.npz) to append as reconstruction views")
     p.add_argument("--append_views_timestamp", type=int, default=40)
+    p.add_argument("--chain_seed_dir", default=None,
+                   help="CHAIN pilot: previous call's output dir; its first "
+                        "--chain_overlap frames hard-condition this call")
+    p.add_argument("--chain_overlap", type=int, default=9)
     p.add_argument("--semantic_channels", type=int, default=16,
                    help="Must match training-time value")
     p.add_argument("--semantic_expansion_version", type=int, default=1, choices=[1, 2],
@@ -806,6 +847,8 @@ def main():
         static_scene=args.static_scene,
         append_views_dir=args.append_views_dir,
         append_views_timestamp=args.append_views_timestamp,
+        chain_seed_dir=args.chain_seed_dir,
+        chain_overlap=args.chain_overlap,
         semantic_channels=args.semantic_channels,
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
