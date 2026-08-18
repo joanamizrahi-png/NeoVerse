@@ -254,6 +254,7 @@ def semantic_inference(
     static_scene: bool = False,
     append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
     append_views_timestamp: int = 40,      # scene-time the appended dream commits to
+    append_views_stride: int = 1,          # subsample appended views (VRAM guard)
     chain_seed_dir: str = None,            # CHAIN: previous call's output dir to seed from
     chain_overlap: int = 9,                # video frames to seed (1+4k)
     semantic_channels: int = 16,
@@ -376,11 +377,12 @@ def semantic_inference(
             dream.append(f[:, :, ::-1])
         cap.release()
         assert dream, f"no frames in {append_views_dir}/rgb.mp4"
+        dream = dream[::append_views_stride]
         images = images + [_PILImage.fromarray(f).resize(images[0].size)
                            for f in dream]
         lab_path = os.path.join(append_views_dir, "semantic_labels.npz")
         if os.path.exists(lab_path):
-            appended_labels = np.load(lab_path)["labels"]
+            appended_labels = np.load(lab_path)["labels"][::append_views_stride]
         print(f"  DREAM LIFT: appended {len(dream)} generated views from "
               f"{append_views_dir} (timestamp {append_views_timestamp})", flush=True)
 
@@ -721,6 +723,7 @@ def parse_args():
                    help="DREAM LIFT pilot: dir with a generated sweep's rgb.mp4 "
                         "(+semantic_labels.npz) to append as reconstruction views")
     p.add_argument("--append_views_timestamp", type=int, default=40)
+    p.add_argument("--append_views_stride", type=int, default=1)
     p.add_argument("--chain_seed_dir", default=None,
                    help="CHAIN pilot: previous call's output dir; its first "
                         "--chain_overlap frames hard-condition this call")
@@ -847,6 +850,7 @@ def main():
         static_scene=args.static_scene,
         append_views_dir=args.append_views_dir,
         append_views_timestamp=args.append_views_timestamp,
+        append_views_stride=args.append_views_stride,
         chain_seed_dir=args.chain_seed_dir,
         chain_overlap=args.chain_overlap,
         semantic_channels=args.semantic_channels,
