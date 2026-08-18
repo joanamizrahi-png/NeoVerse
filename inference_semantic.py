@@ -252,6 +252,8 @@ def semantic_inference(
     disable_semantic_channels: bool = False,
     alpha_threshold: float = 1.0,
     static_scene: bool = False,
+    append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
+    append_views_timestamp: int = 40,      # scene-time the appended dream commits to
     semantic_channels: int = 16,
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
@@ -352,6 +354,34 @@ def semantic_inference(
     )
     print(f"  {len(images)} frames at {images[0].size}", flush=True)
 
+    # ---- 4b. DREAM LIFTING pilot (docs/DREAM_CONSISTENCY_DESIGNS.md, design 1):
+    # append a previously GENERATED sweep's frames (+labels) to the input view
+    # set so the reconstructor lifts the dream into the Gaussian field. The
+    # reconstructor estimates poses itself; appended frames share the anchor's
+    # timestamp (append_views_timestamp), committing the dream as static
+    # geometry at that moment.
+    n_real = len(images)
+    appended_labels = None
+    if append_views_dir is not None:
+        from PIL import Image as _PILImage
+        import cv2 as _cv2
+        cap = _cv2.VideoCapture(os.path.join(append_views_dir, "rgb.mp4"))
+        dream = []
+        while True:
+            ok, f = cap.read()
+            if not ok:
+                break
+            dream.append(f[:, :, ::-1])
+        cap.release()
+        assert dream, f"no frames in {append_views_dir}/rgb.mp4"
+        images = images + [_PILImage.fromarray(f).resize(images[0].size)
+                           for f in dream]
+        lab_path = os.path.join(append_views_dir, "semantic_labels.npz")
+        if os.path.exists(lab_path):
+            appended_labels = np.load(lab_path)["labels"]
+        print(f"  DREAM LIFT: appended {len(dream)} generated views from "
+              f"{append_views_dir} (timestamp {append_views_timestamp})", flush=True)
+
     # ---- 5. Build camera trajectory ----
     # trajectory_file (ribbon-cache sweeps): a JSON of explicit c2w matrices,
     # typically mode="global" in the RECON frame — used verbatim, which is how
@@ -377,7 +407,8 @@ def semantic_inference(
         views["timestamp"] = torch.zeros((1, len(images)), dtype=torch.int64, device=device)
     else:
         views["is_static"] = torch.zeros((1, len(images)), dtype=torch.bool, device=device)
-        views["timestamp"] = torch.arange(0, len(images), dtype=torch.int64, device=device).unsqueeze(0)
+        ts = list(range(n_real)) + [append_views_timestamp] * (len(images) - n_real)
+        views["timestamp"] = torch.tensor(ts, dtype=torch.int64, device=device).unsqueeze(0)
 
     # ---- 6b. Semantic hint at inference ----
     # Real SAM3-of-input-frames labels: matches the training-time hint distribution
@@ -388,8 +419,13 @@ def semantic_inference(
         if semantic_labels is not None:
             # load_video may crop to num_frames < labels.shape[0] (SAM3 was run at
             # the video's native length); slice labels to match if longer, error if shorter.
-            if semantic_labels.shape[0] > len(images):
-                semantic_labels = semantic_labels[:len(images)]
+            if semantic_labels.shape[0] > n_real:
+                semantic_labels = semantic_labels[:n_real]
+            if appended_labels is not None:
+                # dream lift: the generated sweep's labels ride along so the
+                # dream's semantics fuse onto its lifted Gaussians too.
+                semantic_labels = np.concatenate(
+                    [semantic_labels, appended_labels[:len(images) - n_real]])
             assert semantic_labels.shape[0] == len(images), (
                 f"label frames {semantic_labels.shape[0]} < video frames {len(images)}; "
                 f"re-run sam3_precompute_labels.py with --num_frames {len(images)}"
@@ -644,6 +680,10 @@ def parse_args():
     p.add_argument("--disable_lora", action="store_true",
                    help="Skip Wan's 4-step distilled LoRA (slower but sometimes cleaner)")
     p.add_argument("--static_scene", action="store_true")
+    p.add_argument("--append_views_dir", default=None,
+                   help="DREAM LIFT pilot: dir with a generated sweep's rgb.mp4 "
+                        "(+semantic_labels.npz) to append as reconstruction views")
+    p.add_argument("--append_views_timestamp", type=int, default=40)
     p.add_argument("--semantic_channels", type=int, default=16,
                    help="Must match training-time value")
     p.add_argument("--semantic_expansion_version", type=int, default=1, choices=[1, 2],
@@ -764,6 +804,8 @@ def main():
         seed=args.seed,
         use_lora=not args.disable_lora,
         static_scene=args.static_scene,
+        append_views_dir=args.append_views_dir,
+        append_views_timestamp=args.append_views_timestamp,
         semantic_channels=args.semantic_channels,
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
