@@ -33,7 +33,7 @@ CKPT=$(ls -t "$RUNS"/checkpoint-epoch-*.safetensors 2>/dev/null | head -1 || tru
 [ -f "$CKPT" ] || { echo "FATAL: no v10 checkpoint under $RUNS"; exit 1; }
 DREAM=/scratch/m000204-pm06b/joana/outputs/ribbon_cache_spin/rugd_trail_00/spin_f40_lat+0.00
 TRAJ=/scratch/m000204-pm06b/joana/outputs/ribbon_traj_spin/rugd_trail_00
-OUTROOT=/scratch/m000204-pm06b/joana/outputs/dreamlift_pilot
+OUTROOT=${OUTROOT:-/scratch/m000204-pm06b/joana/outputs/dreamlift_pilot}
 [ -d "$DREAM" ] || { echo "FATAL: no dream sweep at $DREAM"; exit 1; }
 
 for SPIN in spin_f40_lat+0.00 spin_f42_lat+0.00; do
@@ -45,6 +45,8 @@ python inference_semantic.py \
     --append_views_dir "$DREAM" \
     --append_views_timestamp 80 \
     --append_views_stride 3 \
+    --append_views_poses "$TRAJ/spin_f40_lat+0.00.json" \
+    --input_poses_npz /scratch/m000204-pm06b/joana/outputs/poses/rugd_trail_00_poses.npz \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt \
     --semantic_expansion_version 2 --lora_rank 8 \

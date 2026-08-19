@@ -255,6 +255,10 @@ def semantic_inference(
     append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
     append_views_timestamp: int = 40,      # scene-time the appended dream commits to
     append_views_stride: int = 1,          # subsample appended views (VRAM guard)
+    append_views_poses: str = None,        # trajectory json of the appended views'
+                                           # RECON-frame c2w (pose prior for the lift)
+    input_poses_npz: str = None,           # poses npz of the REAL frames (w2c key);
+                                           # required with append_views_poses
     chain_seed_dir: str = None,            # CHAIN: previous call's output dir to seed from
     chain_overlap: int = 9,                # video frames to seed (1+4k)
     chain_seed_lat_range: str = None,      # v2: seed latent frames "a-b" (dream arc) instead of prefix
@@ -384,6 +388,23 @@ def semantic_inference(
         lab_path = os.path.join(append_views_dir, "semantic_labels.npz")
         if os.path.exists(lab_path):
             appended_labels = np.load(lab_path)["labels"][::append_views_stride]
+        if append_views_poses is not None:
+            # POSE-PRIOR LIFT: the reconstructor can't register dream views by
+            # feature matching (no covisibility with real frames — gate B,
+            # 2026-08-19: backward alpha stayed 0%). But we KNOW their poses:
+            # they are our own spin trajectory. Supply camera_poses for ALL
+            # views so registration is given, not guessed.
+            assert input_poses_npz is not None, "--input_poses_npz required with --append_views_poses"
+            with open(append_views_poses) as _f:
+                _mats = np.asarray(json.load(_f)["trajectory"]["frame_matrices"],
+                                   dtype=np.float32)[::append_views_stride]
+            assert len(_mats) == len(dream), f"{len(_mats)} poses vs {len(dream)} dream frames"
+            _real_c2w = np.linalg.inv(
+                np.load(input_poses_npz)["w2c"].astype(np.float64)).astype(np.float32)
+            appended_camera_poses = np.concatenate([_real_c2w[:n_real], _mats])
+            print(f"  POSE PRIOR: camera_poses for all {len(appended_camera_poses)} views", flush=True)
+        else:
+            appended_camera_poses = None
         print(f"  DREAM LIFT: appended {len(dream)} generated views from "
               f"{append_views_dir} (timestamp {append_views_timestamp})", flush=True)
 
@@ -418,6 +439,9 @@ def semantic_inference(
         views["is_static"] = torch.tensor(is_static, dtype=torch.bool, device=device).unsqueeze(0)
         ts = list(range(n_real)) + [append_views_timestamp] * (len(images) - n_real)
         views["timestamp"] = torch.tensor(ts, dtype=torch.int64, device=device).unsqueeze(0)
+        if append_views_dir is not None and appended_camera_poses is not None:
+            views["camera_poses"] = torch.as_tensor(
+                appended_camera_poses, dtype=torch.float32, device=device).unsqueeze(0)
 
     # ---- 6b. Semantic hint at inference ----
     # Real SAM3-of-input-frames labels: matches the training-time hint distribution
@@ -757,6 +781,8 @@ def parse_args():
                         "(+semantic_labels.npz) to append as reconstruction views")
     p.add_argument("--append_views_timestamp", type=int, default=40)
     p.add_argument("--append_views_stride", type=int, default=1)
+    p.add_argument("--append_views_poses", default=None)
+    p.add_argument("--input_poses_npz", default=None)
     p.add_argument("--chain_seed_dir", default=None,
                    help="CHAIN pilot: previous call's output dir; its first "
                         "--chain_overlap frames hard-condition this call")
@@ -886,6 +912,8 @@ def main():
         append_views_dir=args.append_views_dir,
         append_views_timestamp=args.append_views_timestamp,
         append_views_stride=args.append_views_stride,
+        append_views_poses=args.append_views_poses,
+        input_poses_npz=args.input_poses_npz,
         chain_seed_dir=args.chain_seed_dir,
         chain_overlap=args.chain_overlap,
         chain_seed_lat_range=args.chain_seed_lat_range,
