@@ -144,10 +144,13 @@ def main():
             print(f"extracted {len(odom['t'])} odometry samples")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    import imageio.v3 as iio
-    iio.imwrite(args.out / f"{args.name}.mp4", np.stack(frames), fps=16,
-                codec="libx264", macro_block_size=1,
-                ffmpeg_params=["-pix_fmt", "yuv420p"])
+    import cv2 as _cv
+    vw = _cv.VideoWriter(str(args.out / f"{args.name}.mp4"),
+                         _cv.VideoWriter_fourcc(*"mp4v"), 16,
+                         (args.width, args.height))
+    for f in frames:
+        vw.write(f[:, :, ::-1])
+    vw.release()
     np.savez_compressed(
         args.out / f"{args.name}_odom.npz",
         t=np.array(odom["t"]), xyz=np.array(odom["xyz"]),
