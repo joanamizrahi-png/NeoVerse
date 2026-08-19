@@ -523,10 +523,17 @@ class GaussianSplatRenderer(nn.Module):
         V = images.shape[1] - S                              # target view nums
 
         # 1) Predict GS features from tokens, then convert to Gaussian parameters
+        # Chunked over views: numerically identical (per-view convs), bounded
+        # memory — the all-at-once conv OOMs beyond ~81 views (dream-lift
+        # appends generated views past the trained count).
         gs_feats_reshape = rearrange(gs_feats, "b s c h w -> (b s) c h w")
-        gs_params_static = self.gs_head(gs_feats_reshape)
+        def _chunked(head, x, n=32):
+            if x.shape[0] <= n:
+                return head(x)
+            return torch.cat([head(x[i:i + n]) for i in range(0, x.shape[0], n)], dim=0)
+        gs_params_static = _chunked(self.gs_head, gs_feats_reshape)
         if self.is_4dgs:
-            gs_params_dynamic = self.gs_head_dynamic(gs_feats_reshape)
+            gs_params_dynamic = _chunked(self.gs_head_dynamic, gs_feats_reshape)
             is_static = views["is_static"][:, :S].reshape(-1)
             gs_params = torch.where(
                 is_static[:, None, None, None],
