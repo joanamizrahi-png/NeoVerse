@@ -458,8 +458,12 @@ def semantic_inference(
     input_cam2world = predictions["rendered_extrinsics"][0]
     timestamps = predictions["rendered_timestamps"][0]
 
-    ratio = torch.linspace(1, cam_traj.zoom_ratio, K.shape[0], device=device)
-    K_zoomed = K.clone()
+    # Target intrinsics sized by TARGET count (with appended dream views the
+    # input count exceeds it; the old K.shape[0] sizing only worked because
+    # inputs == targets by coincidence).
+    n_t = len(cam_traj)
+    ratio = torch.linspace(1, cam_traj.zoom_ratio, n_t, device=device)
+    K_zoomed = K[:1].expand(n_t, -1, -1).clone()
     K_zoomed[:, 0, 0] *= ratio
     K_zoomed[:, 1, 1] *= ratio
 
@@ -474,7 +478,7 @@ def semantic_inference(
     # frame_indices (e.g. SPIN sweeps: 81 poses all at the anchor frame's
     # timestamp). Ignoring them rendered spins against a running clock —
     # alpha 5% at a pose where the path sweep saw 97% (caught 2026-08-17).
-    target_timestamps = timestamps
+    target_timestamps = timestamps[:n_t]
     if trajectory_file is not None:
         with open(trajectory_file) as _f:
             _fi = json.load(_f).get("trajectory", {}).get("frame_indices")
