@@ -43,7 +43,7 @@ python inference_semantic.py \
     --output_dir "$OUTROOT/$SPIN" \
     --trajectory_file "$TRAJ/$SPIN.json" \
     --append_views_dir "$DREAM" \
-    --append_views_timestamp 40 \
+    --append_views_timestamp 80 \
     --append_views_stride 3 \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt \
