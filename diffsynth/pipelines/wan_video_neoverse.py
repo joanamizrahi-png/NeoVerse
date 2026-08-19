@@ -570,6 +570,9 @@ class WanVideoNeoVersePipeline(BasePipeline):
         # every scheduler step, so temporal attention propagates the previous
         # call's dream into the new frames. Distill-safe (no sigma surgery).
         overlap_seed_latents: Optional[torch.Tensor] = None,
+        # latent-frame index where the seed block starts (0 = prefix; chain v2
+        # seeds the DREAM-ARC latent frames mid-sequence instead)
+        overlap_seed_start: int = 0,
     ):
         # Scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
@@ -617,7 +620,8 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 f"seed channels {overlap_seed_latents.shape[1]} != latent channels {lat.shape[1]}")
             overlap_seed_latents = overlap_seed_latents.to(device=lat.device, dtype=lat.dtype)
             seed_noise = torch.randn_like(overlap_seed_latents)
-            lat[:, :, :L] = self.scheduler.add_noise(
+            s0 = overlap_seed_start
+            lat[:, :, s0:s0 + L] = self.scheduler.add_noise(
                 overlap_seed_latents, seed_noise, timestep=self.scheduler.timesteps[0])
         self.load_models_to_device(self.in_iteration_models)
         models = {name: getattr(self, name) for name in self.in_iteration_models}
@@ -652,13 +656,14 @@ class WanVideoNeoVersePipeline(BasePipeline):
                     device=inputs_shared["latents"].device, dtype=inputs_shared["latents"].dtype)
             if overlap_seed_latents is not None:
                 L = overlap_seed_latents.shape[2]
+                s0 = overlap_seed_start
                 if progress_id + 1 < len(self.scheduler.timesteps):
-                    inputs_shared["latents"][:, :, :L] = self.scheduler.add_noise(
+                    inputs_shared["latents"][:, :, s0:s0 + L] = self.scheduler.add_noise(
                         overlap_seed_latents, seed_noise,
                         timestep=self.scheduler.timesteps[progress_id + 1])
                 else:
                     # final state: exactly the clean seed
-                    inputs_shared["latents"][:, :, :L] = overlap_seed_latents
+                    inputs_shared["latents"][:, :, s0:s0 + L] = overlap_seed_latents
             if latent_traj_sink is not None:
                 latent_traj_sink.append(inputs_shared["latents"][:, :16].detach().to("cpu", torch.bfloat16).clone())
 

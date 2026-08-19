@@ -257,6 +257,7 @@ def semantic_inference(
     append_views_stride: int = 1,          # subsample appended views (VRAM guard)
     chain_seed_dir: str = None,            # CHAIN: previous call's output dir to seed from
     chain_overlap: int = 9,                # video frames to seed (1+4k)
+    chain_seed_lat_range: str = None,      # v2: seed latent frames "a-b" (dream arc) instead of prefix
     semantic_channels: int = 16,
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
@@ -578,35 +579,47 @@ def semantic_inference(
     # chain_overlap output frames (+labels) as clean latents; the pipe hard-
     # conditions the matching latent frames on them every denoise step.
     overlap_seed_latents = None
+    overlap_seed_start = 0
     if chain_seed_dir is not None:
         assert not getattr(pipe, "semantic_analog_bits", False), \
             "chaining not implemented for analog-bits checkpoints"
-        assert (chain_overlap - 1) % 4 == 0, "chain_overlap must be 1+4k video frames"
         from PIL import Image as _PILImage
         import cv2 as _cv2
         cap = _cv2.VideoCapture(os.path.join(chain_seed_dir, "rgb.mp4"))
         prev = []
-        while len(prev) < chain_overlap:
+        while True:
             ok, f = cap.read()
             if not ok:
                 break
             prev.append(f[:, :, ::-1])
         cap.release()
-        assert len(prev) == chain_overlap, f"seed video shorter than {chain_overlap}"
+        assert prev, f"no frames in {chain_seed_dir}/rgb.mp4"
+        # encode the FULL previous sweep so any latent range can be sliced
         seed_pil = [_PILImage.fromarray(f).resize((width, height)) for f in prev]
         sv = pipe.preprocess_video(seed_pil)
         seed_rgb_lat = pipe.vae.encode(sv, device=pipe.device, tiled=False).to(
             dtype=pipe.torch_dtype, device=pipe.device)
-        plab = np.load(os.path.join(chain_seed_dir, "semantic_labels.npz"))["labels"][:chain_overlap]
+        plab = np.load(os.path.join(chain_seed_dir, "semantic_labels.npz"))["labels"][:len(prev)]
         from diffsynth.utils.semantics import labels_to_rgb as _l2rgb
         lab_t = torch.as_tensor(plab.astype(np.int64), device=pipe.device).unsqueeze(0)
         sem_rgb = _l2rgb(lab_t).permute(0, 1, 4, 2, 3)
         sem_rgb = pipe.preprocess_video(sem_rgb)
         seed_sem_lat = pipe.vae.encode(sem_rgb, device=pipe.device, tiled=False).to(
             dtype=pipe.torch_dtype, device=pipe.device)
-        overlap_seed_latents = torch.cat([seed_rgb_lat, seed_sem_lat], dim=1)
-        print(f"CHAIN SEED: {chain_overlap} frames from {chain_seed_dir} -> "
-              f"latents {tuple(overlap_seed_latents.shape)}", flush=True)
+        full = torch.cat([seed_rgb_lat, seed_sem_lat], dim=1)   # [1, C, T_lat, h, w]
+        if chain_seed_lat_range:
+            a, _, b = chain_seed_lat_range.partition("-")
+            a, b = int(a), int(b or int(a) + 1)
+            overlap_seed_latents = full[:, :, a:b]
+            overlap_seed_start = a
+            arc = f"latent frames {a}-{b} (dream arc)"
+        else:
+            # v1 behavior: prefix of chain_overlap video frames
+            L_lat = 1 + (chain_overlap - 1) // 4
+            overlap_seed_latents = full[:, :, :L_lat]
+            arc = f"prefix {chain_overlap} video frames"
+        print(f"CHAIN SEED: {arc} from {chain_seed_dir} -> "
+              f"latents {tuple(overlap_seed_latents.shape)} @ start {overlap_seed_start}", flush=True)
 
     print(f"Running diffusion ({num_inference_steps} steps, cfg={cfg_scale}) ...", flush=True)
     generated_frames = pipe(
@@ -617,6 +630,7 @@ def semantic_inference(
         cfg_scale=cfg_scale, num_inference_steps=num_inference_steps, tiled=False,
         rgb_anchor_traj=rgb_anchor_traj,
         overlap_seed_latents=overlap_seed_latents,
+        overlap_seed_start=overlap_seed_start,
         **wrapped_data,
     )
 
@@ -728,6 +742,8 @@ def parse_args():
                    help="CHAIN pilot: previous call's output dir; its first "
                         "--chain_overlap frames hard-condition this call")
     p.add_argument("--chain_overlap", type=int, default=9)
+    p.add_argument("--chain_seed_lat_range", default=None,
+                   help="v2: seed latent frames a-b (e.g. 6-16 = dream arc) instead of prefix")
     p.add_argument("--semantic_channels", type=int, default=16,
                    help="Must match training-time value")
     p.add_argument("--semantic_expansion_version", type=int, default=1, choices=[1, 2],
@@ -853,6 +869,7 @@ def main():
         append_views_stride=args.append_views_stride,
         chain_seed_dir=args.chain_seed_dir,
         chain_overlap=args.chain_overlap,
+        chain_seed_lat_range=args.chain_seed_lat_range,
         semantic_channels=args.semantic_channels,
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
