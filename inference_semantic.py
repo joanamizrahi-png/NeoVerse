@@ -553,8 +553,19 @@ def semantic_inference(
     np.savez_compressed(os.path.join(output_dir, "alpha.npz"), alpha=alpha_np)
     print(f"Saved alpha mask: {os.path.join(output_dir, 'alpha.npz')}", flush=True)
 
+    # The DIFFUSION side must only see the real frames: appended dream views
+    # exist for reconstruction only (the denoiser inits from input video and
+    # its frame count must match the render). Slice every per-view tensor.
+    views_pipe = views
+    if len(images) != n_real:
+        views_pipe = {
+            k: (v[:, :n_real] if isinstance(v, torch.Tensor)
+                and v.dim() >= 2 and v.shape[0] == 1 and v.shape[1] == len(images)
+                else v)
+            for k, v in views.items()
+        }
     wrapped_data = {
-        "source_views": views,
+        "source_views": views_pipe,
         "target_rgb": target_rgb,
         "target_depth": target_depth,
         "target_mask": target_mask,
