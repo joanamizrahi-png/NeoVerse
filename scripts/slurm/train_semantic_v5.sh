@@ -8,6 +8,7 @@
 #SBATCH --time=16:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/runs/train_semantic_v5/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/runs/train_semantic_v5/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v5: LoRA on patch_embedding + head.head (fixes v4 RGB degradation) +
 # warm-start from v3 epoch-7 + relabeled clips. 15 epochs x 46 clips -> ~690

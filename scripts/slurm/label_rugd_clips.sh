@@ -8,6 +8,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/data/rugd_clips/label-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/data/rugd_clips/label-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Batch-label every RUGD MP4 clip in /scratch/.../rugd_clips/ with SAM 3.
 # Idempotent: skips clips that already have a .npz in outputs/sam3_labels/.

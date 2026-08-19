@@ -8,6 +8,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/inference_v5_epoch20_rugdtrail/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/inference_v5_epoch20_rugdtrail/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Inference on v5 final checkpoint (epoch 20), static trajectory, RUGD trail clip.
 # v5 used LoRA on head+patch_embedding from scratch (no warmstart). Final training

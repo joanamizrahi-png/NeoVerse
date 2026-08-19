@@ -8,6 +8,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/runs/train_semantic_v1/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/runs/train_semantic_v1/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # REAL semantic finetune training on ~30 RUGD clips.
 # 10 epochs x ~30 clips x 4-step gradient accumulation -> ~75-90 gradient steps.

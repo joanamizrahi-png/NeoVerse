@@ -8,6 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/relabel-all-slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/relabel-all-slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Relabel ALL 46 training clips with the SAM3 priority-order fix.
 # Overwrites existing outputs/sam3_labels/*.npz. ~1 min per clip -> ~50 min total.

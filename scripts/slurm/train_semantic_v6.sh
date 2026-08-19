@@ -8,6 +8,7 @@
 #SBATCH --time=16:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/runs/train_semantic_v6/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/runs/train_semantic_v6/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v6: parallel _sem submodules (full-rank semantic pathway) + distill LoRA merged
 # at TRAIN time (same 4-step regime as inference). No v3 warm-start (stale

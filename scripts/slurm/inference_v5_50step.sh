@@ -8,6 +8,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-inf-v5-50step-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-inf-v5-50step-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # 50-step eval of v5 WITHOUT the lightx2v 4-step distill LoRA (--disable_lora).
 #

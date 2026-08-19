@@ -8,6 +8,7 @@
 #SBATCH --time=00:45:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-inf-sem-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-inf-sem-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v8 stage-1 validation inference: the epoch-5 checkpoint of the x0-prediction
 # run. CRITICAL: --semantic_x0_prediction must be set — v8 checkpoints output

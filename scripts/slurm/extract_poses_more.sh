@@ -8,6 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/poses/more-slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/poses/more-slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Extract per-frame camera poses for a diverse subset of clips to verify our
 # "y is the up axis" hypothesis. If ALL of these show y as the smallest-range

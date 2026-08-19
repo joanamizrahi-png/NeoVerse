@@ -8,6 +8,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v7-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v7-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v7: dense RUGD GT targets (Option B hybrid) + trunk LoRA rank 8, 30 epochs.
 # Logs go to the joana/ root (always exists) — SLURM won't create log dirs.

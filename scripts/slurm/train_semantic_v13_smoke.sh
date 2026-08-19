@@ -8,6 +8,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v13smoke-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v13smoke-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v13 SMOKE (Track B): analog-bits semantic slot, 5 epochs (~2h).
 # Pass criteria are in the config header (train_semantic_v13smoke_bits.yaml).

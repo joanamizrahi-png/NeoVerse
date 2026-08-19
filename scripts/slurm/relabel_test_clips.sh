@@ -8,6 +8,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/relabel-slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels/relabel-slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Re-run SAM3 labeling on the 4 test clips after the priority-order fix.
 # ~1 min per clip. Uses the sam3 conda env (not neoverse -- different transformers version).

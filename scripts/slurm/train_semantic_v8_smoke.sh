@@ -8,6 +8,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v8smoke-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v8smoke-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v8 stage-1 SMOKE: 1 epoch of the x0-prediction recipe (~25-30 min + load).
 # Pass criteria are in the config header (train_semantic_v8_smoke.yaml).

@@ -8,6 +8,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/runs/train_semantic_v4/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/runs/train_semantic_v4/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v4: warm-start from v3 epoch-7, unfreeze dit.patch_embedding + dit.head,
 # weighted semantic loss (SEM_WEIGHT=4). 15 epochs x ~46 clips -> ~690 gradient steps.

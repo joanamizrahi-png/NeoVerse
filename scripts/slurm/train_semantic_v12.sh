@@ -8,6 +8,7 @@
 #SBATCH --time=14:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v12-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v12-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v12: v10 recipe + big head only (park-safe upgrade), ~11h.
 # Pass criteria are in the config header (train_semantic_v12.yaml).

@@ -8,6 +8,7 @@
 #SBATCH --time=01:30:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/poses/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/poses/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Run NeoVerse's reconstructor on the 4 test clips and save per-frame
 # camera poses (position + heading + w2c + K) to outputs/poses/<stem>.npz.

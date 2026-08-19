@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=20:00:00
-#SBATCH --exclude=n04
+#SBATCH --exclude=n04,n13,n17,n24
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v13-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v13-%j.err
 

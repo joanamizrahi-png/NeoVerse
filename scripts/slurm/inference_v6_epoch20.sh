@@ -8,6 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/inference_v6_epoch20_rugdtrail/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/inference_v6_epoch20_rugdtrail/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # v6 inference. Must match training-time config exactly:
 #   - semantic_expansion_version 2 (parallel _sem submodules)

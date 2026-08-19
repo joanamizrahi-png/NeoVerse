@@ -8,6 +8,7 @@
 #SBATCH --time=00:20:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Run freeze_camera_demo.py on driving.mp4.
 # Produces two MP4s:

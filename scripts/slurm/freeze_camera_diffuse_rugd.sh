@@ -8,6 +8,7 @@
 #SBATCH --time=00:45:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/park-diffuse-slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/park-diffuse-slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Freeze-camera + diffusion on rugd_park-1_00 (natural / static scene).
 # We saw driving.mp4's diffusion hallucinate parked cars driving off; this

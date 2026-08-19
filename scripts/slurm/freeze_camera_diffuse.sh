@@ -8,6 +8,7 @@
 #SBATCH --time=00:45:00
 #SBATCH --output=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/diffuse-slurm-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/NeoVerse/outputs/freeze_camera/diffuse-slurm-%j.err
+#SBATCH --exclude=n04,n13,n17,n24
 
 # Full-pipeline freeze camera: reconstructor + diffusion at fixed pose.
 # Same idea as freeze_camera_demo.sh but with 4-step Wan diffusion applied,
