@@ -149,7 +149,7 @@ def main():
                          _cv.VideoWriter_fourcc(*"mp4v"), 16,
                          (args.width, args.height))
     for f in frames:
-        vw.write(f[:, :, ::-1])
+        vw.write(np.ascontiguousarray(f[:, :, ::-1]))
     vw.release()
     np.savez_compressed(
         args.out / f"{args.name}_odom.npz",
