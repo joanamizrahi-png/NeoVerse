@@ -39,9 +39,9 @@ python -c "import torch; print(f'torch: {torch.__version__}, cuda: {torch.cuda.i
 nvidia-smi | head -20
 
 # Single source of truth for which yaml is being trained on. The sanity block
-# below and `python train.py` below both use this path -- keeps them in lockstep,
-# so changing datasets is a one-line edit here instead of a two-place bug.
-CONFIG_PATH="training/configs/train_semantic.yaml"
+# below and `python train.py` below both use this path -- keeps them in lockstep.
+# CONFIG env overrides (e.g. CONFIG=training/configs/train_semantic_v15.yaml).
+CONFIG_PATH="${CONFIG:-training/configs/train_semantic.yaml}"
 
 # --- sanity: dataset has clips + labels ---
 # Parses ROOT and labels_dir straight out of the yaml's `train_dataset` line so
