@@ -411,7 +411,11 @@ def semantic_inference(
         views["is_static"] = torch.ones((1, len(images)), dtype=torch.bool, device=device)
         views["timestamp"] = torch.zeros((1, len(images)), dtype=torch.int64, device=device)
     else:
-        views["is_static"] = torch.zeros((1, len(images)), dtype=torch.bool, device=device)
+        # Appended dream views commit as STATIC geometry (visible at all
+        # times, no dynamic-timestamp bookkeeping — which also asserts
+        # monotonic timestamps and would reject the out-of-order append).
+        is_static = [False] * n_real + [True] * (len(images) - n_real)
+        views["is_static"] = torch.tensor(is_static, dtype=torch.bool, device=device).unsqueeze(0)
         ts = list(range(n_real)) + [append_views_timestamp] * (len(images) - n_real)
         views["timestamp"] = torch.tensor(ts, dtype=torch.int64, device=device).unsqueeze(0)
 
