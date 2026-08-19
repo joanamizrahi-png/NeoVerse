@@ -475,7 +475,12 @@ def semantic_inference(
                   "Semantic output will likely be palette-noise.", flush=True)
 
     with torch.amp.autocast("cuda", dtype=pipe.torch_dtype):
-        predictions = pipe.reconstructor(views, is_inference=True, use_motion=False)
+        # cond_flags=[depth, rays, camera]: the reconstructor IGNORES supplied
+        # priors unless the matching flag is up (2am find: poses rode along
+        # unread — sum(cond_flags)>0 gates extract_priors entirely).
+        cf = [0, 0, 1] if "camera_poses" in views else [0, 0, 0]
+        predictions = pipe.reconstructor(views, cond_flags=cf,
+                                         is_inference=True, use_motion=False)
 
     gaussians = predictions["splats"]
     K = predictions["rendered_intrinsics"][0]
