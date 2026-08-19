@@ -36,12 +36,17 @@ TRAJ=/scratch/m000204-pm06b/joana/outputs/ribbon_traj_spin/rugd_trail_00
 OUTROOT=${OUTROOT:-/scratch/m000204-pm06b/joana/outputs/dreamlift_pilot}
 [ -d "$DREAM" ] || { echo "FATAL: no dream sweep at $DREAM"; exit 1; }
 
-for SPIN in spin_f40_lat+0.00 spin_f42_lat+0.00; do
+# TRAJS/TRAJDIR knobs: render OTHER trajectories through the dream-appended
+# reconstruction (e.g. a forward sweep: TRAJDIR=.../ribbon_traj/rugd_trail_00
+# TRAJS=sweep_lat+0.00_yaw000). Defaults reproduce the original spin pilots.
+TRAJDIR=${TRAJDIR:-$TRAJ}
+TRAJS=${TRAJS:-"spin_f40_lat+0.00 spin_f42_lat+0.00"}
+for SPIN in $TRAJS; do
 python inference_semantic.py \
     --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/rugd_trail_00.mp4 \
     --checkpoint "$CKPT" \
     --output_dir "$OUTROOT/$SPIN" \
-    --trajectory_file "$TRAJ/$SPIN.json" \
+    --trajectory_file "$TRAJDIR/$SPIN.json" \
     --append_views_dir "$DREAM" \
     --append_views_timestamp 80 \
     --append_views_stride 3 \
