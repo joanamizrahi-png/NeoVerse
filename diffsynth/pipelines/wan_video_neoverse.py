@@ -230,6 +230,13 @@ class WanVideoNeoVersePipeline(BasePipeline):
         # blurry to be worth a VAE decode). Decodes a short PREFIX of latent
         # frames (causal video VAE -> prefix decode is valid) to bound memory.
         CE_W = float(getattr(self, "semantic_ce_weight", 0.0))
+        # v16 fix 3: on clips whose only target is SAM3 (no dense human GT),
+        # the class losses would teach "reproduce the hint" and cancel the
+        # "correct the hint" behaviour the GT clips teach. Zero them there;
+        # the diffusion/appearance half still trains on every clip.
+        if (getattr(self, "semantic_ce_gt_only", False)
+                and not getattr(self, "_batch_has_dense_gt", True)):
+            CE_W = 0.0
         head = getattr(self, "semantic_class_head", None)
         sem_labels = inputs.get("semantic_labels", None)
 
@@ -726,6 +733,12 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         # stay the hint on the Gaussians. Clips without GT fall back to SAM3 (hybrid).
         semantic_labels = None
         target_key = "target_labels" if "target_labels" in source_views else "labels"
+        # v16: remember whether THIS batch has dense human GT. Clips whose only
+        # target is SAM3 teach "reproduce the hint", which directly cancels the
+        # "correct the hint" behaviour learned from GT clips (v15 lost park-1
+        # vegetation exactly this way). semantic_ce_gt_only skips the class
+        # losses on those clips; they still train the diffusion/appearance half.
+        pipe._batch_has_dense_gt = ("target_labels" in source_views)
         if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and target_key in source_views:
             labels = source_views[target_key]
             if isinstance(labels, np.ndarray):

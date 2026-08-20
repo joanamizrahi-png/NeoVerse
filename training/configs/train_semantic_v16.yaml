@@ -9,6 +9,12 @@
 #
 # FIX 1  semantic_ce_ignore_void: void pixels teach nothing (no-op on RUGD,
 #        whose dense GT is ~0.1% void; decisive on the pseudo-labelled clips).
+# FIX 3  semantic_ce_gt_only: pseudo-labelled clips (GND/SCAND/Go2W) train the
+#        diffusion/appearance half only — they never teach class conventions,
+#        so "correct the SAM3 hint" (learned from RUGD's dense GT) survives.
+#        This is why v15 lost park vegetation: park-1_02 is HELD OUT, so at
+#        inference the model only has SAM3's hint, and v15 had been taught on
+#        8 clips to reproduce that hint verbatim.
 # FIX 2  pretrained_path: warm-start from v10's final checkpoint and fine-tune
 #        for 12 epochs instead of re-deriving everything from scratch, so the
 #        classes v10 already mastered are preserved.
@@ -31,6 +37,7 @@ semantic_ce_weight: 0.1        # start ~0.1x the diffusion loss; tune by val mIo
 semantic_ce_sigma_max: 1.0
 semantic_ce_latent_frames: 2   # -> 5 decoded video frames per CE step
 semantic_ce_ignore_void: true  # FIX 1 (see header)
+semantic_ce_gt_only: true      # FIX 3: class losses only where dense human GT exists
 semantic_seg_weight: 0.05      # Change 3, no size filter (decision 2026-08-03)
 num_semantic_classes: 14
 

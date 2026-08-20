@@ -31,6 +31,10 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_ce_weight: float = 0.0,       # v8 Change 2: decoded-space CE weight (0 = off)
         semantic_ce_sigma_max: float = 0.7,    # apply CE only at timesteps with sigma below this
         semantic_ce_latent_frames: int = 2,    # latent frames to VAE-decode for CE (memory bound)
+        semantic_ce_gt_only: bool = False,      # v16 fix 3: class losses only on clips with dense
+                                                # human GT (pseudo-labelled clips would teach
+                                                # "reproduce the SAM3 hint", cancelling the
+                                                # "correct the hint" behaviour GT clips teach).
         semantic_ce_ignore_void: bool = False,  # v16: skip void(0) pixels in the CE. Clips without
                                                 # dense GT train against SAM3 output, whose
                                                 # "unlabeled"->void regions otherwise teach the
@@ -110,6 +114,7 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_ce_sigma_max = float(semantic_ce_sigma_max)
             self.pipe.semantic_ce_latent_frames = int(semantic_ce_latent_frames)
             self.pipe.semantic_ce_ignore_void = bool(semantic_ce_ignore_void)
+            self.pipe.semantic_ce_gt_only = bool(semantic_ce_gt_only)
             self.pipe.semantic_seg_weight = float(semantic_seg_weight)
             self.pipe.semantic_seg_min_px = int(semantic_seg_min_px)
             self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)
@@ -246,6 +251,7 @@ if __name__ == "__main__":
         semantic_ce_sigma_max=float(getattr(args, "semantic_ce_sigma_max", 0.7)),
         semantic_ce_latent_frames=int(getattr(args, "semantic_ce_latent_frames", 2)),
         semantic_ce_ignore_void=bool(getattr(args, "semantic_ce_ignore_void", False)),
+        semantic_ce_gt_only=bool(getattr(args, "semantic_ce_gt_only", False)),
         semantic_seg_weight=float(getattr(args, "semantic_seg_weight", 0.0)),
         semantic_seg_min_px=int(getattr(args, "semantic_seg_min_px", 0)),
         rgb_preservation_weight=float(getattr(args, "rgb_preservation_weight", 0.0)),
