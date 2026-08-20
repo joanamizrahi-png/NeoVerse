@@ -257,7 +257,8 @@ class WanVideoNeoVersePipeline(BasePipeline):
             ])[:, :Tt]                                              # [B, T', h, w]
             ce = torch.nn.functional.cross_entropy(
                 logits[:, :, :gt_lat.shape[1]].flatten(2).transpose(1, 2).reshape(-1, K),
-                gt_lat.flatten().to(logits.device))
+                gt_lat.flatten().to(logits.device),
+                ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
             loss = loss + CE_W * ce
             if self._last_split_loss is not None:
                 self._last_split_loss["semantic_ce"] = float(ce.detach())
@@ -289,7 +290,8 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 logits = head(frames).float()
                 gt = sem_labels[:, :n_vid].reshape(-1, *sem_labels.shape[-2:])
                 ce = torch.nn.functional.cross_entropy(
-                    logits, gt.long().to(logits.device))
+                    logits, gt.long().to(logits.device),
+                    ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
                 loss = loss + CE_W * ce
                 if self._last_split_loss is not None:
                     self._last_split_loss["semantic_ce"] = float(ce.detach())

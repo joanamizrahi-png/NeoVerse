@@ -1,13 +1,19 @@
-# v15: the v10 recipe UNCHANGED, retrained on the EXPANDED dataset:
-#   combined_train_data_v14 (46 RUGD clips, dense GT targets)
-#   + GND campus clips (gnd_AU_60/180/300 — report cards 2026-08-19: replay
-#     SSIM 0.32-0.36, on-path coverage 96-100%, all better than trail_00)
-#   + SCAND crowd clips (scand_sanjac_20/80 — the 2.8%-person-recall fix)
-#   + Go2W lab clips (added same day when converted)
-# New clips have SAM3 v14 hints but NO dense GT -> per-clip fallback in
-# SpatialVID: they train against the SAM3 pseudo-labels (labels_dir), RUGD
-# keeps its GT targets (target_labels_dir). Judge vs v10: held-out RUGD must
-# HOLD (79.9/80.6), SCAND person recall must RISE (v10: 2.8% vs SAM3 13%).
+# v16: same expanded data as v15, two fixes for what v15 got wrong.
+#
+# v15 measured (2026-08-20): held-out trail-6 80.9% (v10 79.9, HELD) but
+# park-1 68.4% (v10 80.6, LOST — vegetation IoU 67 -> 0.2) and SCAND
+# predicted 57.6% VOID at 99.9% real geometry (v10 got persons 2.8%, v15 0%).
+# Cause: clips without dense GT (GND/SCAND/Go2W) train against SAM3 output,
+# whose "unlabeled"->void regions are taught as a real class, and the shifted
+# mixture re-broke the park vegetation/grass boundary v10 had fixed.
+#
+# FIX 1  semantic_ce_ignore_void: void pixels teach nothing (no-op on RUGD,
+#        whose dense GT is ~0.1% void; decisive on the pseudo-labelled clips).
+# FIX 2  pretrained_path: warm-start from v10's final checkpoint and fine-tune
+#        for 12 epochs instead of re-deriving everything from scratch, so the
+#        classes v10 already mastered are preserved.
+# Judge vs v10: held-out RUGD must HOLD (79.9/80.6), SCAND void must FALL and
+# person recall RISE, GND campus classes must beat v10's.
 
 height: 336
 width: 560
@@ -24,6 +30,7 @@ semantic_x0_prediction: true
 semantic_ce_weight: 0.1        # start ~0.1x the diffusion loss; tune by val mIoU
 semantic_ce_sigma_max: 1.0
 semantic_ce_latent_frames: 2   # -> 5 decoded video frames per CE step
+semantic_ce_ignore_void: true  # FIX 1 (see header)
 semantic_seg_weight: 0.05      # Change 3, no size filter (decision 2026-08-03)
 num_semantic_classes: 14
 
@@ -59,15 +66,15 @@ lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
 lora_exclude_modules: null
 lora_rank: 8
 
-pretrained_path: null
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v10/checkpoint-epoch-30.safetensors
 
 learning_rate: 1e-4
-num_epochs: 30
+num_epochs: 12
 batch_size: 1
 num_workers: 2
 pin_memory: false
 gradient_accumulation_steps: 1
-output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v15
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v16
 remove_prefix_in_ckpt: pipe.
 
 use_gradient_checkpointing: true
@@ -83,7 +90,7 @@ start_epoch: 0
 resume_step: null
 
 wandb_project: neoverse-semantic
-wandb_run_name: v15_expanded_data
+wandb_run_name: v16_warmstart_ignorevoid
 wandb_mode: online
 
 debug_save_root: null
