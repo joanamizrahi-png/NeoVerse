@@ -78,8 +78,11 @@ if [ "${ANCHOR:-0}" = "1" ]; then
 fi
 OUT="/scratch/m000204-pm06b/joana/inference_${RUN_NAME}_${CLIP}_${TRAJ}${MAG}${DECSUF}${ANCSUF}${EPSUF}"
 mkdir -p "$OUT"
+# CLIPS_DIR: source clips (default RUGD; gnd_clips/scand_clips/go2w_clips for
+# grading a retrain on the new datasets).
+CLIPS_DIR=${CLIPS_DIR:-/scratch/m000204-pm06b/joana/data/rugd_clips}
 python inference_semantic.py \
-    --input_path /scratch/m000204-pm06b/joana/data/rugd_clips/${CLIP}.mp4 \
+    --input_path ${CLIPS_DIR}/${CLIP}.mp4 \
     --checkpoint "$CKPT" \
     --output_dir "$OUT" \
     --model_path /scratch/m000204-pm06b/joana/NeoVerse/models \
