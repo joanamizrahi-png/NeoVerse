@@ -24,11 +24,14 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 
 for CLIPS_DIR in \
     /scratch/m000204-pm06b/joana/data/gnd_clips \
-    /scratch/m000204-pm06b/joana/data/scand_clips
+    /scratch/m000204-pm06b/joana/data/scand_clips \
+    /scratch/m000204-pm06b/joana/data/go2w_clips
 do
     [ ! -d "$CLIPS_DIR" ] && continue
     for CLIP_PATH in "$CLIPS_DIR"/*.mp4; do
         [ ! -f "$CLIP_PATH" ] && continue
+        # pano-view mp4s are reconstruction anchors, not training clips
+        [[ "$CLIP_PATH" == *_pano_yaw* ]] && continue
         echo "==== $(basename "$CLIP_PATH") ===="
         python sam3_precompute_labels.py --input_path "$CLIP_PATH"
     done

@@ -24,6 +24,8 @@ for clips_dir in "$SCRATCH/data/gnd_clips" "$SCRATCH/data/scand_clips" "$SCRATCH
     for f in "$clips_dir"/*.mp4; do
         [ ! -f "$f" ] && continue
         stem=$(basename "$f" .mp4)
+        # pano-view mp4s are reconstruction anchors, not training clips
+        [[ "$stem" == *_pano_yaw* ]] && continue
         if [ ! -f "$LABELS_DIR/$stem.npz" ]; then
             echo "SKIP $stem (no v14 SAM3 label — run sam3_new_clips.sh first)"
             skipped=$((skipped + 1))

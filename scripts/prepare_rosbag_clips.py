@@ -64,6 +64,25 @@ def decode_image(msg, msgtype):
     raise ValueError(f"unhandled encoding {msg.encoding}")
 
 
+def equirect_to_pinhole_maps(eq_w, eq_h, yaw_deg, fov_deg, out_w, out_h):
+    """cv2.remap maps sampling a virtual pinhole view (heading yaw_deg, level
+    pitch) out of an equirectangular panorama. Precompute once per yaw, reuse
+    across frames."""
+    f = (out_w / 2.0) / np.tan(np.radians(fov_deg) / 2.0)
+    u, v = np.meshgrid(np.arange(out_w), np.arange(out_h))
+    x = (u - out_w / 2.0) / f
+    y = (v - out_h / 2.0) / f
+    n = np.sqrt(x * x + y * y + 1.0)
+    yaw = np.radians(yaw_deg)
+    dx = np.cos(yaw) * x + np.sin(yaw)
+    dz = -np.sin(yaw) * x + np.cos(yaw)
+    lon = np.arctan2(dx, dz)
+    lat = -np.arcsin(y / n)
+    mx = ((lon / (2 * np.pi) + 0.5) * eq_w).astype(np.float32)
+    my = ((0.5 - lat / np.pi) * eq_h).astype(np.float32)
+    return mx, my
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bag", required=True, type=Path)
@@ -79,6 +98,13 @@ def main():
     ap.add_argument("--num_frames", type=int, default=81)
     ap.add_argument("--width", type=int, default=560)
     ap.add_argument("--height", type=int, default=336)
+    ap.add_argument("--pano_topic", default=None,
+                    help="equirectangular 360 topic (e.g. /equirectangular/"
+                         "image): also writes <name>_pano_yaw{DEG}.mp4 virtual"
+                         " pinhole views — real geometry at all headings for "
+                         "the reconstruction (the dream-free cache route)")
+    ap.add_argument("--pano_views", type=int, default=4)
+    ap.add_argument("--pano_fov", type=float, default=90.0)
     args = ap.parse_args()
 
     with open_reader(args.bag) as reader:
@@ -129,6 +155,34 @@ def main():
             k += 1
         print(f"extracted {len(frames)} frames")
 
+        pano_views = {}
+        if args.pano_topic:
+            conns_p = [c for c in reader.connections if c.topic == args.pano_topic]
+            assert conns_p, f"no topic {args.pano_topic}; run --inspect"
+            # pano runs slower (~8Hz) than the camera: take the nearest pano
+            # frame to each picked camera timestamp.
+            pmsgs = [(t, c, raw) for c, t, raw in reader.messages(connections=conns_p)
+                     if t0 - int(2e9) <= t <= t1 + int(2e9)]
+            ptimes = np.array([t for t, _, _ in pmsgs])
+            need = sorted({int(np.argmin(np.abs(ptimes - s))) for s in picked_stamps})
+            decoded = {}
+            for i in need:
+                t, c, raw = pmsgs[i]
+                decoded[i] = decode_image(reader.deserialize(raw, c.msgtype), c.msgtype)
+            eq_h, eq_w = decoded[need[0]].shape[:2]
+            yaws = [i * 360.0 / args.pano_views for i in range(args.pano_views)]
+            maps = {y: equirect_to_pinhole_maps(eq_w, eq_h, y, args.pano_fov,
+                                                args.width, args.height)
+                    for y in yaws}
+            for y in yaws:
+                mx, my = maps[y]
+                pano_views[y] = [
+                    cv2.remap(decoded[int(np.argmin(np.abs(ptimes - s)))], mx, my,
+                              cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+                    for s in picked_stamps]
+            print(f"pano: {len(need)} unique panos -> {args.pano_views} views "
+                  f"x {len(picked_stamps)} frames ({eq_w}x{eq_h} source)")
+
         odom = {"t": [], "xyz": [], "quat": []}
         if odom_topic:
             conns_od = [c for c in reader.connections if c.topic == odom_topic]
@@ -151,12 +205,20 @@ def main():
     for f in frames:
         vw.write(np.ascontiguousarray(f[:, :, ::-1]))
     vw.release()
+    for y, view_frames in pano_views.items():
+        pw = _cv.VideoWriter(str(args.out / f"{args.name}_pano_yaw{int(y):03d}.mp4"),
+                             _cv.VideoWriter_fourcc(*"mp4v"), 16,
+                             (args.width, args.height))
+        for f in view_frames:
+            pw.write(np.ascontiguousarray(f[:, :, ::-1]))
+        pw.release()
     np.savez_compressed(
         args.out / f"{args.name}_odom.npz",
         t=np.array(odom["t"]), xyz=np.array(odom["xyz"]),
         quat=np.array(odom["quat"]),
         frame_stamps=(np.array(picked_stamps) - t0) / 1e9)
-    print(f"wrote {args.out}/{args.name}.mp4 + _odom.npz")
+    extra = f" + {len(pano_views)} pano-view mp4s" if pano_views else ""
+    print(f"wrote {args.out}/{args.name}.mp4 + _odom.npz{extra}")
 
 
 if __name__ == "__main__":
