@@ -25,7 +25,8 @@ cd /scratch/m000204-pm06b/joana/NeoVerse
 for CLIPS_DIR in \
     /scratch/m000204-pm06b/joana/data/gnd_clips \
     /scratch/m000204-pm06b/joana/data/scand_clips \
-    /scratch/m000204-pm06b/joana/data/go2w_clips
+    /scratch/m000204-pm06b/joana/data/go2w_clips \
+    /scratch/m000204-pm06b/joana/data/cityscapes_clips
 do
     [ ! -d "$CLIPS_DIR" ] && continue
     for CLIP_PATH in "$CLIPS_DIR"/*.mp4; do
