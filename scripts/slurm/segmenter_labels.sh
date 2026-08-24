@@ -27,9 +27,15 @@ echo "commit: $(git log --oneline -1)"
 
 python -c "import transformers" 2>/dev/null || python -m pip install --quiet transformers
 
+# MODEL / OUT_DIR knobs drive the supervisor bake-off:
+#   default            -> Mask2Former-Cityscapes  -> outputs/segformer_gt_labels_v14
+#   MODEL=...vistas... -> Mask2Former-Mapillary   -> OUT_DIR=outputs/m2f_vistas_labels_v14
+MODEL=${MODEL:-facebook/mask2former-swin-large-cityscapes-semantic}
+OUT_DIR=${OUT_DIR:-outputs/segformer_gt_labels_v14}
 D=/scratch/m000204-pm06b/joana/data
 python scripts/segmenter_labels.py \
     --videos "$D"/scand_clips/*.mp4 "$D"/gnd_clips/gnd_*.mp4 \
              "$D"/cityscapes_clips/*.mp4 "$D"/go2w_clips/go2w_*.mp4 \
-    --out_dir outputs/segformer_gt_labels_v14
-echo "==> segmenter labels done"
+    --model "$MODEL" \
+    --out_dir "$OUT_DIR"
+echo "==> segmenter labels done: $OUT_DIR"
