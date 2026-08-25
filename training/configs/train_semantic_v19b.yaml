@@ -1,0 +1,98 @@
+# v19: campus-NATIVE distillation — the v18 post-mortem applied.
+#
+# v18 measured (2026-08-25): trail-6 67.0 (v10 79.9, LOST — trail eaten by the
+# "road" prior), SCAND person still ~0% (drowned: person pixels are a sliver
+# of the CE, and 14 car-view Stuttgart clips dominated the mixture). The
+# supervisor's labels were good; the distillation dosage was wrong.
+# Two changes:
+#   1. ROOT back to v15 (RUGD + SCAND + GND + Go2W; NO Stuttgart) — supervise
+#      campus classes on ROBOT-VIEW campus clips only (segmenter targets in
+#      gt_labels_v18 cover them).
+#   2. semantic_ce_class_weights: person and other rare classes upweighted so
+#      they carry gradient.
+# Judge vs v10: trail-6 holds ~80, park holds ~80, SCAND person > 0 with
+# road surface intact, GND sidewalk/road sane.
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2
+semantic_x0_prediction: true
+
+# --- Change 2 ---
+semantic_ce_weight: 0.1        # start ~0.1x the diffusion loss; tune by val mIoU
+semantic_ce_sigma_max: 1.0
+semantic_ce_latent_frames: 2   # -> 5 decoded video frames per CE step
+semantic_ce_ignore_void: true  # FIX 1 (see header)
+semantic_ce_gt_only: true      # v17 fix; kept
+# v19b CONTROL: same campus-native diet, NO class weighting — separates
+# "the diet fixed person" from "the weights fixed person".
+semantic_ce_class_weights: null
+semantic_seg_weight: 0.05      # Change 3, no size filter (decision 2026-08-03)
+num_semantic_classes: 14
+
+semantic_loss_weight: 2.0
+rgb_preservation_weight: 1.0
+snr_gamma: 5.0
+
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/combined_train_data_v15", labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels_v14", target_labels_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/gt_labels_v18", segments_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam2_segments", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+# semantic_class_head added: the CE head trains alongside the _sem submodules.
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem,semantic_class_head"
+
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 8
+
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v10/checkpoint-epoch-30.safetensors
+
+learning_rate: 1e-4
+num_epochs: 12
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v19b
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v19b_campus_native_unweighted
+wandb_mode: online
+
+debug_save_root: null
