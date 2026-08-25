@@ -40,6 +40,10 @@ class WanTrainingModule(DiffusionTrainingModule):
                                                 # "unlabeled"->void regions otherwise teach the
                                                 # model to emit void (v15: 57.6% void on SCAND
                                                 # at 99.9% real geometry).
+        semantic_ce_class_weights: "list | None" = None,  # v19: per-class CE weights
+                                                # (14 floats; upweight rare classes like person
+                                                # so they carry gradient — the v18 diagnosis:
+                                                # person pixels drowned in the mixture).
         semantic_seg_weight: float = 0.0,      # v8 Change 3: SAM2 segment-homogeneity weight (0 = off)
         semantic_seg_min_px: int = 0,          # 0 = no size filter (default); >0 enables the confetti guard
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
@@ -115,6 +119,9 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_ce_latent_frames = int(semantic_ce_latent_frames)
             self.pipe.semantic_ce_ignore_void = bool(semantic_ce_ignore_void)
             self.pipe.semantic_ce_gt_only = bool(semantic_ce_gt_only)
+            self.pipe.semantic_ce_class_weights = (
+                [float(x) for x in semantic_ce_class_weights]
+                if semantic_ce_class_weights is not None else None)
             self.pipe.semantic_seg_weight = float(semantic_seg_weight)
             self.pipe.semantic_seg_min_px = int(semantic_seg_min_px)
             self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)
@@ -252,6 +259,7 @@ if __name__ == "__main__":
         semantic_ce_latent_frames=int(getattr(args, "semantic_ce_latent_frames", 2)),
         semantic_ce_ignore_void=bool(getattr(args, "semantic_ce_ignore_void", False)),
         semantic_ce_gt_only=bool(getattr(args, "semantic_ce_gt_only", False)),
+        semantic_ce_class_weights=getattr(args, "semantic_ce_class_weights", None),
         semantic_seg_weight=float(getattr(args, "semantic_seg_weight", 0.0)),
         semantic_seg_min_px=int(getattr(args, "semantic_seg_min_px", 0)),
         rgb_preservation_weight=float(getattr(args, "rgb_preservation_weight", 0.0)),

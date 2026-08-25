@@ -262,9 +262,13 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 _mode_pool2d(sem_labels[b, idx].long(), 8, K)
                 for b in range(sem_labels.shape[0])
             ])[:, :Tt]                                              # [B, T', h, w]
+            _cw = getattr(self, "semantic_ce_class_weights", None)
+            _cw = (torch.tensor(_cw, dtype=logits.dtype, device=logits.device)
+                   if _cw is not None else None)
             ce = torch.nn.functional.cross_entropy(
                 logits[:, :, :gt_lat.shape[1]].flatten(2).transpose(1, 2).reshape(-1, K),
                 gt_lat.flatten().to(logits.device),
+                weight=_cw,
                 ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
             loss = loss + CE_W * ce
             if self._last_split_loss is not None:
@@ -296,8 +300,12 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 frames = decoded.permute(0, 2, 1, 3, 4).flatten(0, 1)  # [B*T,3,H,W]
                 logits = head(frames).float()
                 gt = sem_labels[:, :n_vid].reshape(-1, *sem_labels.shape[-2:])
+                _cw = getattr(self, "semantic_ce_class_weights", None)
+                _cw = (torch.tensor(_cw, dtype=logits.dtype, device=logits.device)
+                       if _cw is not None else None)
                 ce = torch.nn.functional.cross_entropy(
                     logits, gt.long().to(logits.device),
+                    weight=_cw,
                     ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
                 loss = loss + CE_W * ce
                 if self._last_split_loss is not None:
