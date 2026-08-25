@@ -88,7 +88,7 @@ start_epoch: 0
 resume_step: null
 
 wandb_project: neoverse-semantic
-wandb_run_name: v16_warmstart_ignorevoid
+wandb_run_name: v18_segformer_distill
 wandb_mode: online
 
 debug_save_root: null
