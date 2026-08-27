@@ -44,6 +44,14 @@ class WanTrainingModule(DiffusionTrainingModule):
                                                 # (14 floats; upweight rare classes like person
                                                 # so they carry gradient — the v18 diagnosis:
                                                 # person pixels drowned in the mixture).
+        pseudo_gt_reliable_classes: "list | None" = None,  # v20: on pseudo-GT clips,
+                                                # CE only where GT is one of these class ids
+                                                # (supervisor's home domain, e.g. [6,7,12,13]);
+                                                # its noisy vegetation/terrain labels never
+                                                # touch the loss.
+        pseudo_gt_scene_prefixes: "list | None" = None,  # v20: clip-name prefixes counted
+                                                # as pseudo-GT (e.g. ["scand_","gnd_","go2w_"]);
+                                                # everything else keeps full CE (human GT).
         semantic_seg_weight: float = 0.0,      # v8 Change 3: SAM2 segment-homogeneity weight (0 = off)
         semantic_seg_min_px: int = 0,          # 0 = no size filter (default); >0 enables the confetti guard
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
@@ -122,6 +130,12 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_ce_class_weights = (
                 [float(x) for x in semantic_ce_class_weights]
                 if semantic_ce_class_weights is not None else None)
+            self.pipe.pseudo_gt_reliable_classes = (
+                [int(x) for x in pseudo_gt_reliable_classes]
+                if pseudo_gt_reliable_classes is not None else None)
+            self.pipe.pseudo_gt_scene_prefixes = (
+                [str(x) for x in pseudo_gt_scene_prefixes]
+                if pseudo_gt_scene_prefixes is not None else None)
             self.pipe.semantic_seg_weight = float(semantic_seg_weight)
             self.pipe.semantic_seg_min_px = int(semantic_seg_min_px)
             self.pipe.rgb_preservation_weight = float(rgb_preservation_weight)

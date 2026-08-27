@@ -240,6 +240,21 @@ class WanVideoNeoVersePipeline(BasePipeline):
         head = getattr(self, "semantic_class_head", None)
         sem_labels = inputs.get("semantic_labels", None)
 
+        # v20: on pseudo-GT clips, restrict the CE to the supervisor's RELIABLE
+        # classes (road/sidewalk/person/vehicle) — its vegetation/terrain labels
+        # are the noise that dragged v19/v19b below v10 on the off-road bars.
+        # Returns a float mask over gt pixels, or None (human-GT clip / off).
+        def _reliable_class_mask(gt):
+            classes = getattr(self, "pseudo_gt_reliable_classes", None)
+            prefixes = getattr(self, "pseudo_gt_scene_prefixes", None)
+            clip = getattr(self, "_batch_clip_name", None)
+            if not classes or not prefixes or clip is None:
+                return None
+            if not any(str(clip).startswith(p) for p in prefixes):
+                return None
+            rel = torch.tensor(classes, device=gt.device, dtype=gt.dtype)
+            return torch.isin(gt, rel).to(torch.float32)
+
         # Track B (analog bits): CE lives at LATENT resolution — logits are the
         # negative squared distances from the predicted bit vector to each
         # class's binary code; GT is the mode-pooled label map on the same
@@ -265,11 +280,18 @@ class WanVideoNeoVersePipeline(BasePipeline):
             _cw = getattr(self, "semantic_ce_class_weights", None)
             _cw = (torch.tensor(_cw, dtype=logits.dtype, device=logits.device)
                    if _cw is not None else None)
-            ce = torch.nn.functional.cross_entropy(
-                logits[:, :, :gt_lat.shape[1]].flatten(2).transpose(1, 2).reshape(-1, K),
-                gt_lat.flatten().to(logits.device),
-                weight=_cw,
-                ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
+            _flat_logits = logits[:, :, :gt_lat.shape[1]].flatten(2).transpose(1, 2).reshape(-1, K)
+            _flat_gt = gt_lat.flatten().to(logits.device)
+            _ign = 0 if getattr(self, "semantic_ce_ignore_void", False) else -100
+            _rel = _reliable_class_mask(_flat_gt)
+            if _rel is None:
+                ce = torch.nn.functional.cross_entropy(
+                    _flat_logits, _flat_gt, weight=_cw, ignore_index=_ign)
+            else:
+                _per = torch.nn.functional.cross_entropy(
+                    _flat_logits, _flat_gt, weight=_cw, ignore_index=_ign,
+                    reduction="none")
+                ce = (_per * _rel).sum() / _rel.sum().clamp(min=1)
             loss = loss + CE_W * ce
             if self._last_split_loss is not None:
                 self._last_split_loss["semantic_ce"] = float(ce.detach())
@@ -303,10 +325,17 @@ class WanVideoNeoVersePipeline(BasePipeline):
                 _cw = getattr(self, "semantic_ce_class_weights", None)
                 _cw = (torch.tensor(_cw, dtype=logits.dtype, device=logits.device)
                        if _cw is not None else None)
-                ce = torch.nn.functional.cross_entropy(
-                    logits, gt.long().to(logits.device),
-                    weight=_cw,
-                    ignore_index=(0 if getattr(self, "semantic_ce_ignore_void", False) else -100))
+                _gt = gt.long().to(logits.device)
+                _ign = 0 if getattr(self, "semantic_ce_ignore_void", False) else -100
+                _rel = _reliable_class_mask(_gt)
+                if _rel is None:
+                    ce = torch.nn.functional.cross_entropy(
+                        logits, _gt, weight=_cw, ignore_index=_ign)
+                else:
+                    _per = torch.nn.functional.cross_entropy(
+                        logits, _gt, weight=_cw, ignore_index=_ign,
+                        reduction="none")
+                    ce = (_per * _rel).sum() / _rel.sum().clamp(min=1)
                 loss = loss + CE_W * ce
                 if self._last_split_loss is not None:
                     self._last_split_loss["semantic_ce"] = float(ce.detach())
@@ -747,6 +776,15 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         # vegetation exactly this way). semantic_ce_gt_only skips the class
         # losses on those clips; they still train the diffusion/appearance half.
         pipe._batch_has_dense_gt = ("target_labels" in source_views)
+        # v20: clip identity for the reliable-class loss mask (training batch
+        # size is 1, asserted above; video_name may arrive nested per view).
+        _vn = source_views.get("video_name", None)
+        try:
+            while isinstance(_vn, (list, tuple, np.ndarray)):
+                _vn = _vn[0]
+        except (IndexError, TypeError):
+            _vn = None
+        pipe._batch_clip_name = str(_vn) if _vn is not None else None
         if pipe.is_training and getattr(pipe, "semantic_channels", 0) > 0 and target_key in source_views:
             labels = source_views[target_key]
             if isinstance(labels, np.ndarray):
