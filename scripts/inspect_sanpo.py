@@ -39,15 +39,12 @@ def read_mask(path: Path):
 
 
 def mask_to_ids(m: np.ndarray) -> np.ndarray:
-    """Collapse whatever encoding the mask uses into small int ids for viz.
-    Single channel -> as-is; multi channel -> first channel (empirically SANPO
-    panoptic PNGs carry semantic id in a channel; verified via mask_format.txt).
-    """
+    """SANPO panoptic PNG encoding (verified 2026-08-28): the RED channel is
+    the semantic class id (labelmap.json ids 0-30); green/blue carry instance
+    bytes. cv2 loads BGR, so semantic = channel 2. Reading channel 0 was the
+    bug behind the phantom '82% unlabeled'."""
     if m.ndim == 3:
-        m = m[..., 0]
-    if m.dtype == np.uint16:
-        # semantic id may be id // 1000 (COCO-panoptic style); keep both views
-        return m
+        m = m[..., 2]
     return m
 
 
