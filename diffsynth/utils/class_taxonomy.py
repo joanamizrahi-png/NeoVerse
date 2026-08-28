@@ -20,12 +20,12 @@ V14 = [
     ("void",       (  0,   0,   0), 0.00),   # 0  unlabeled — conservative
     ("sky",        (200, 225, 245), 0.00),   # 1
     ("trail",      (150, 100,  55), 0.85),   # 2  dirt / gravel / mulch
-    ("grass",      ( 75, 190,  80), 0.85),   # 3
+    ("grass",      ( 75, 190,  80), 0.75),   # 3  urban norm: don't trample lawns
     ("rough",      ( 95,  65,  35), 0.35),   # 4  sand / mud / rock / log
     ("water",      ( 50, 120, 200), 0.00),   # 5  hazard: never step
     ("sidewalk",   (210, 210, 210), 0.95),   # 6  function known: pedestrian
     ("road",       ( 70,  70,  85), 0.50),   # 7  function known: vehicles
-    ("pavement",   (235, 205, 150), 0.70),   # 8  hard surface, function unknown
+    ("pavement",   (235, 205, 150), 0.80),   # 8  hard flat > lawn (2026-08-28)
     ("stairs",     (220, 140,  80), 0.50),   # 9  dedicated Go2 gait
     ("obstacle",   (185,  55,  50), 0.00),   # 10 solid statics incl. tree trunks
     ("vegetation", (170, 200,  55), 0.20),   # 11 soft / pushable
