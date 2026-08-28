@@ -91,7 +91,7 @@ def main():
     cv2.imwrite(str(out / "V14_PREVIEW_SHEET.png"), np.vstack(rows))
     print(f"sheet: {out / 'V14_PREVIEW_SHEET.png'}", flush=True)
 
-    sess = sorted({p.parents[2] for p in masks})[0]
+    sess = sorted({p.parents[3] for p in masks})[0]
     cam = sess / "camera_chest" / "left"
     vw = None
     for mp in sorted((cam / "segmentation_masks").glob("*.png"))[:args.video_frames]:
