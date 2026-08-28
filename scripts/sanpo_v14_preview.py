@@ -24,9 +24,15 @@ import numpy as np
 
 from convert_sanpo_clips import SANPO_TO_V14
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from diffsynth.utils.class_taxonomy import V14  # noqa: E402
+# Load the taxonomy FILE directly — importing the diffsynth package drags in
+# modelscope etc., unavailable outside the neoverse env (login-node friendly).
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "class_taxonomy",
+    Path(__file__).resolve().parents[1] / "diffsynth" / "utils" / "class_taxonomy.py")
+_tax = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_tax)
+V14 = _tax.V14
 
 PAL = np.array([c for _, c, _ in V14], dtype=np.uint8)          # RGB
 SCORES = np.array([s for _, _, s in V14], dtype=np.float32)
