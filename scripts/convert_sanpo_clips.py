@@ -167,30 +167,61 @@ def main():
     print(f"==> {len(made)} sanpo clips", flush=True)
 
     # ---- v21 dataset roots: RUGD (dense GT) + SANPO (dense GT), no pseudo ----
+    # SpatialVID layout (training/data/datasets/spatialvid.py): a metadata CSV
+    # at data/train/SpatialVID_HQ_metadata.csv drives everything; each clip is
+    # SpatialVid/HQ/<name>/<name>.mp4 with a caption.json beside it.
+    import json as _json
+    import pandas as pd
+
     root21 = out / "combined_train_data_v21"
+    hq21 = root21 / "SpatialVid" / "HQ"
     sam21 = out / "sam3_labels_v21"
     gt21 = out / "gt_labels_v21"
-    for d in (root21, sam21, gt21):
+    for d in (hq21, sam21, gt21, root21 / "data" / "train"):
         d.mkdir(parents=True, exist_ok=True)
 
     def link(src: Path, dst: Path):
         if not dst.exists() and src.exists():
             dst.symlink_to(src)
 
-    n_rugd = 0
-    for clip in sorted(Path(args.v15_root).glob("rugd_*.mp4")):
-        stem = clip.stem
+    meta = pd.read_csv(
+        Path(args.v15_root) / "data" / "train" / "SpatialVID_HQ_metadata.csv")
+    rugd = meta[meta["id"].astype(str).str.startswith("rugd_")]
+    rows, n_rugd = [], 0
+    for _, row in rugd.iterrows():
+        stem = str(row["id"])
         gt = Path(args.gt_dir) / f"{stem}.npz"
         if not gt.exists():
             continue                      # GT-less rugd clips stay out of v21
-        link(clip, root21 / clip.name)
+        clip_dir = (Path(args.v15_root) / "SpatialVid" / "HQ"
+                    / Path(str(row["video path"])).parts[0])
+        link(clip_dir, hq21 / clip_dir.name)
         link(Path(args.sam3_dir) / f"{stem}.npz", sam21 / f"{stem}.npz")
         link(gt, gt21 / f"{stem}.npz")
+        rows.append(row.to_dict())
         n_rugd += 1
+
+    template = rows[0] if rows else meta.iloc[0].to_dict()
     for name in made:
-        link(clips_dir / f"{name}.mp4", root21 / f"{name}.mp4")
+        d = hq21 / name
+        d.mkdir(exist_ok=True)
+        link(clips_dir / f"{name}.mp4", d / f"{name}.mp4")
+        cap = d / "caption.json"
+        if not cap.exists():
+            cap.write_text(_json.dumps({
+                "SceneDescription": "a chest-height walk through an urban "
+                                    "street scene with sidewalks, roads, "
+                                    "pedestrians and buildings"}))
         link(labels_dir / f"{name}.npz", sam21 / f"{name}.npz")   # GT as hint
         link(labels_dir / f"{name}.npz", gt21 / f"{name}.npz")    # GT target
+        row = dict(template)
+        row.update({"id": name, "video path": f"{name}/{name}.mp4",
+                    "annotation path": name, "num frames": N_FRAMES,
+                    "fps": 15})
+        rows.append(row)
+
+    pd.DataFrame(rows).to_csv(
+        root21 / "data" / "train" / "SpatialVID_HQ_metadata.csv", index=False)
     print(f"==> v21 roots: {n_rugd} rugd + {len(made)} sanpo clips", flush=True)
     print(f"    {root21}\n    {sam21}\n    {gt21}", flush=True)
 
