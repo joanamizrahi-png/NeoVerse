@@ -1,0 +1,94 @@
+# v21: the first ALL-HUMAN-GT recipe — RUGD off-road + SANPO urban.
+#
+# Root cause of the v15-v20 saga: urban clips only had SAM3 pseudo-GT, so
+# every recipe either taught supervisor noise (v15/v19) or had to mask it
+# (v20). SANPO (Google, CC BY 4.0, chest-height pedestrian video, dense
+# human-anchored panoptic masks) finally gives urban scenes what RUGD gives
+# off-road: real ground truth. Diet: 32 RUGD + 169 SANPO clips, converted by
+# scripts/convert_sanpo_clips.py (mapping locked with Joana 2026-08-28:
+# curb->obstacle, crosswalk/paved-trail->sidewalk, other-walkable->pavement,
+# terrain->grass, void loss-masked). No pseudo-GT anywhere, so the v20 mask
+# knobs are gone. SANPO caveat (disclosed): clips use their GT as the
+# gaussian hint too; the 3D degradation pipeline still corrupts hints.
+# Judge vs v10 + v18: trail-6/park hold ~80 (off-road retained), GND/site-X
+# sidewalk-vs-road separation appears (the walkable-proof gate), person > 0.
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2
+semantic_x0_prediction: true
+
+semantic_ce_weight: 0.1
+semantic_ce_sigma_max: 1.0
+semantic_ce_latent_frames: 2
+semantic_ce_ignore_void: true
+semantic_ce_gt_only: true
+semantic_ce_class_weights: null
+semantic_seg_weight: 0.05
+num_semantic_classes: 14
+
+semantic_loss_weight: 2.0
+rgb_preservation_weight: 1.0
+snr_gamma: 5.0
+
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/data/sanpo_v21/combined_train_data_v21", labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v21/sam3_labels_v21", target_labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v21/gt_labels_v21", segments_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam2_segments", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem,semantic_class_head"
+
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 8
+
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v10/checkpoint-epoch-30.safetensors
+
+learning_rate: 1e-4
+num_epochs: 12
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v21
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v21_sanpo_gt
+wandb_mode: online
+
+debug_save_root: null
