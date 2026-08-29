@@ -37,10 +37,26 @@ V14_NAMES = [n for n, _, _ in V14]
 V14_SCORES = np.array([s for _, _, s in V14], dtype=np.float32)
 
 
-def v14_palette():
+# Palette v2 (2026-08-29, designed from the measured sidewalk->sky decode
+# flip): pull four classes out of crowded color corners. Min pairwise
+# distance 39 -> ~76. VERSIONED: checkpoints are trained against one palette
+# and must be decoded with the same one — v21 and earlier are palette 1.
+V14_V2_OVERRIDES = {
+    2: (255, 160,   0),   # trail:    away from obstacle's brick red
+    4: (120,  60,  10),   # rough:    away from road's dark slate
+    5: (  0,  60, 255),   # water:    away from vehicle's blue-violet
+    6: (  0, 255, 255),   # sidewalk: out of the pale sky corner (the bug)
+}
+
+
+def v14_palette(version: int = 1):
     """[14, 3] float in [0,1] — import torch lazily so cpu-only tools work."""
     import torch
-    return torch.tensor([c for _, c, _ in V14], dtype=torch.float32) / 255.0
+    cols = [list(c) for _, c, _ in V14]
+    if int(version) == 2:
+        for i, c in V14_V2_OVERRIDES.items():
+            cols[i] = list(c)
+    return torch.tensor(cols, dtype=torch.float32) / 255.0
 
 
 # ---- remap from any legacy label file, BY NAME (immune to id-order bugs) ----

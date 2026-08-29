@@ -61,9 +61,11 @@ NUM_CLASSES = CLASS_COLORS.shape[0]
 _ACTIVE_PALETTE = CLASS_COLORS
 
 
-def set_active_palette(num_classes: int):
+def set_active_palette(num_classes: int, version: int = 1):
     """Switch colorize/decode to the palette for `num_classes`. 30 = legacy
-    CLASS_COLORS (default); 14 = the v14 navigation taxonomy."""
+    CLASS_COLORS (default); 14 = the v14 navigation taxonomy. `version`
+    selects the v14 color set (2026-08-29): checkpoints must be trained AND
+    decoded with the same version — v21 and earlier are version 1."""
     global _ACTIVE_PALETTE
     if num_classes == NUM_CLASSES:
         _ACTIVE_PALETTE = CLASS_COLORS
@@ -71,7 +73,7 @@ def set_active_palette(num_classes: int):
         from .class_taxonomy import v14_palette, NUM_CLASSES_V14
         assert num_classes == NUM_CLASSES_V14, \
             f"no palette defined for num_classes={num_classes}"
-        _ACTIVE_PALETTE = v14_palette()
+        _ACTIVE_PALETTE = v14_palette(version=version)
     return _ACTIVE_PALETTE
 
 

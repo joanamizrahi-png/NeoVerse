@@ -287,6 +287,7 @@ def semantic_inference(
     semantic_expansion_version: int = 1,   # match training config; 2 = v6 _sem split
     semantic_x0_prediction: bool = False,  # MUST match training: v8 ckpts True, v6/v7 False
     num_semantic_classes: int = 30,        # 30 legacy / 14 for v9+ checkpoints — sets the palette
+    palette_version: int = 1,              # v14 color set (v22+ checkpoints: 2)
     decode_with_head: bool = False,        # class ids from the trained reader instead of palette snap
     traj_angle: "float | None" = None,     # pan/tilt/orbit magnitude in degrees (None = preset default)
     traj_distance: "float | None" = None,  # move/push magnitude in scene units (None = preset default)
@@ -306,7 +307,8 @@ def semantic_inference(
         pipe = _prebuilt_pipe
         pipe.semantic_analog_bits = bool(semantic_analog_bits)
         from diffsynth.utils.semantics import set_active_palette
-        set_active_palette(int(num_semantic_classes))
+        set_active_palette(int(num_semantic_classes),
+                           version=int(palette_version))
     else:
         # ---- 1. Base pipeline ----
         lora_path = None
@@ -330,7 +332,8 @@ def semantic_inference(
             pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
             pipe.semantic_analog_bits = bool(semantic_analog_bits)
             from diffsynth.utils.semantics import set_active_palette
-            set_active_palette(int(num_semantic_classes))
+            set_active_palette(int(num_semantic_classes),
+                               version=int(palette_version))
             if semantic_expansion_version == 1:
                 expand_dit_for_semantics(pipe.dit, extra=semantic_channels)
                 if pipe.control_branch is not None:
@@ -822,6 +825,8 @@ def parse_args():
                         "2 = v6 parallel _sem submodules.")
     p.add_argument("--lora_rank", type=int, default=32,
                    help="Must match training-time lora_rank")
+    p.add_argument("--palette_version", type=int, default=1,
+                   help="v14 color set: 1 = v21 and earlier, 2 = v22+")
     p.add_argument("--num_semantic_classes", type=int, default=30,
                    help="30 legacy / 14 for v9+ checkpoints (selects the palette)")
     p.add_argument("--traj_angle", type=float, default=None)
@@ -906,6 +911,7 @@ def main():
                 semantic_expansion_version=args.semantic_expansion_version,
                 semantic_x0_prediction=args.semantic_x0_prediction,
                 num_semantic_classes=args.num_semantic_classes,
+                palette_version=args.palette_version,
                 decode_with_head=args.decode_with_head,
                 lora_rank=args.lora_rank,
                 lora_target_modules=(args.lora_target_modules.split(",")
@@ -947,6 +953,7 @@ def main():
         semantic_expansion_version=args.semantic_expansion_version,
         semantic_x0_prediction=args.semantic_x0_prediction,
         num_semantic_classes=args.num_semantic_classes,
+        palette_version=args.palette_version,
         decode_with_head=args.decode_with_head,
         traj_angle=args.traj_angle,
         traj_distance=args.traj_distance,

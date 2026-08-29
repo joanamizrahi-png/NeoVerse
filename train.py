@@ -55,6 +55,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         semantic_seg_weight: float = 0.0,      # v8 Change 3: SAM2 segment-homogeneity weight (0 = off)
         semantic_seg_min_px: int = 0,          # 0 = no size filter (default); >0 enables the confetti guard
         num_semantic_classes: int = 30,        # class-count for the CE head (class-set agnostic)
+        semantic_palette_version: int = 1,     # v14 color set (v22+: 2)
         rgb_preservation_weight: float = 0.0,  # v10 candidate: MSE to the frozen vanilla RGB prediction (0 = off)
         rgb_preservation_ramp_steps: int = 0,  # v10d: linear ramp of pres weight over first N steps (0 = constant)
         semantic_head_hidden: int = 64,        # v10e: reader head width
@@ -118,7 +119,8 @@ class WanTrainingModule(DiffusionTrainingModule):
             self.pipe.semantic_x0_prediction = bool(semantic_x0_prediction)
             # v14: colorize/decode follow the configured class count everywhere.
             from diffsynth.utils.semantics import set_active_palette
-            set_active_palette(int(num_semantic_classes))
+            set_active_palette(int(num_semantic_classes),
+                               version=int(semantic_palette_version))
             # v8 Change 2: decoded-space CE. The head must exist BEFORE
             # freeze_except so `semantic_class_head` in trainable_models can
             # unfreeze it; requires x0-prediction (it reads the clean-latent guess).
@@ -283,6 +285,7 @@ if __name__ == "__main__":
         snr_gamma=float(getattr(args, "snr_gamma", 0.0)),
         semantic_analog_bits=bool(getattr(args, "semantic_analog_bits", False)),
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
+        semantic_palette_version=int(getattr(args, "semantic_palette_version", 1)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
     # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for

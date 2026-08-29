@@ -46,6 +46,8 @@ if [ "${HEAD_DECODE:-0}" = "1" ]; then EXTRA="--decode_with_head"; DECSUF="_head
 # BITS=1: render an analog-bits checkpoint (v13+) — 4 semantic channels,
 # threshold decode built in (no reader head, no palette snap).
 if [ "${BITS:-0}" = "1" ]; then EXTRA="$EXTRA --semantic_channels 4 --semantic_analog_bits"; DECSUF="${DECSUF}_bits"; fi
+# PALETTE=2: v22+ checkpoints trained on the separated v14 color set.
+if [ -n "${PALETTE:-}" ] && [ "${PALETTE}" != "1" ]; then EXTRA="$EXTRA --palette_version $PALETTE"; DECSUF="${DECSUF}_p${PALETTE}"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
