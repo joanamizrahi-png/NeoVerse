@@ -215,15 +215,36 @@ def _sem_video_to_labels_and_colorized(sem_video: torch.Tensor, head=None) -> tu
             x = x.permute(0, 2, 3, 1)
     x = ((x + 1.0) * 0.5).clamp_(0.0, 1.0)             # [T, H, W, 3] float in [0,1]
 
+    # Horizon prior (2026-08-29): sky physically cannot appear below the
+    # horizon in our fixed-pitch rigs, yet the decoder was flipping bright
+    # GROUND (v21's newly-learned sidewalk — raw color dist 62 to sidewalk vs
+    # 87 to sky, measured on sitex_w135) into the sky class, whose 0.0 trav
+    # score turns learned sidewalk into phantom walls. Below sky_horizon_frac
+    # of the image height, the sky class is excluded and the runner-up wins.
+    SKY_ID, sky_horizon_frac = 1, 0.45
+
     if head is not None:
         # learned reader: [T,H,W,3] in [0,1] -> [-1,1] [T,3,H,W] (its training diet)
         head = head.float().cpu()
         frames = (x * 2.0 - 1.0).permute(0, 3, 1, 2)
-        labels = torch.cat([head(frames[i:i + 8]).argmax(1)
-                            for i in range(0, frames.shape[0], 8)], dim=0)
+        chunks = []
+        for i in range(0, frames.shape[0], 8):
+            logits = head(frames[i:i + 8])             # [b, C, H, W]
+            h_img = logits.shape[-2]
+            logits[:, SKY_ID, int(h_img * sky_horizon_frac):, :] = -1e9
+            chunks.append(logits.argmax(1))
+        labels = torch.cat(chunks, dim=0)
     else:
         # Nearest-palette-color snap -> class ids
         labels = rgb_to_labels(x)                      # [T, H, W] int
+        h_img = labels.shape[-2]
+        below = labels[:, int(h_img * sky_horizon_frac):, :]
+        if (below == SKY_ID).any():
+            pal = get_active_palette().to(x.device)    # [C, 3] in [0,1]
+            sub = x[:, int(h_img * sky_horizon_frac):, :, :]
+            d = (sub.unsqueeze(-2) - pal).pow(2).sum(-1)   # [., H', W, C]
+            d[..., SKY_ID] = 1e9
+            labels[:, int(h_img * sky_horizon_frac):, :] = d.argmin(-1)
     labels_np = labels.cpu().numpy().astype(np.int8)
 
     # Colorize with the canonical palette (crisper than the VAE-decoded blobs)
