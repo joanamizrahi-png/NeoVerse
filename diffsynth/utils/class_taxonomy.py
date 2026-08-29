@@ -96,6 +96,7 @@ SAM3_PROMPTS = [
     ("water", 5, 60),
     ("concrete", 8, 70), ("asphalt", 8, 70),
     ("road", 7, 80), ("sidewalk", 6, 80), ("crosswalk", 6, 85),
+    ("curb", 10, 88),   # 2026-08-28: drop-edge hazard; must beat the ground
     ("stairs", 9, 85),
     ("vegetation", 11, 30),
     ("tree", 10, 90), ("building", 10, 100), ("wall", 10, 100),
