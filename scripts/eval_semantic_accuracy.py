@@ -41,7 +41,25 @@ def main():
             continue
         iou = (gt_c & pr_c).sum() / union * 100
         share = gt_c.sum() / valid.sum() * 100
-        print(f"  {V14_NAMES[c]:>17}: IoU {iou:5.1f}  (GT share {share:4.1f}%)")
+        # Where this GT class's pixels actually went (top-3 predicted classes):
+        # an IoU of 0.0 alone can't distinguish "predicted the near-synonym"
+        # (sidewalk->pavement) from "predicted garbage".
+        u, cnt = np.unique(pred[gt_c], return_counts=True)
+        top = np.argsort(-cnt)[:3]
+        went = ", ".join(
+            f"{V14_NAMES[u[i]] if u[i] < len(V14_NAMES) else u[i]} "
+            f"{100 * cnt[i] / cnt.sum():.0f}%" for i in top)
+        print(f"  {V14_NAMES[c]:>17}: IoU {iou:5.1f}  (GT share {share:4.1f}%)"
+              f"  -> painted as: {went}")
+
+    # One-line reward-relevance summary: accuracy when traversability-
+    # equivalent pairs count as matches (sidewalk<->pavement, trail<->grass,
+    # obstacle<->vegetation). The 14-class table above stays the main result.
+    lut = np.arange(32, dtype=np.int8)
+    for keep, other in ((6, 8), (2, 3), (10, 11)):
+        lut[other] = keep
+    macc = float((lut[pred][valid] == lut[gt][valid]).mean())
+    print(f"  traversability-merged accuracy: {macc * 100:.1f}%")
 
 
 if __name__ == "__main__":
