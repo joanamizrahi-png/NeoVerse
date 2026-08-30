@@ -74,10 +74,25 @@ V14_V3 = [
 ]
 
 
+# Palette v4 (2026-08-30, Joana's principle: same optimal geometry as v3,
+# but hue-NEIGHBOR colors go to classes whose confusion is HARMLESS —
+# salmon(~obstacle-red) moves from trail (borders obstacles constantly!) to
+# vegetation (veg<->obstacle flip costs nothing: both no-go), etc.
+V14_V4 = list(V14_V3)
+V14_V4[2]  = (128, 255, 128)   # trail      light-green (~grass: both walkable)
+V14_V4[4]  = (128, 128,   0)   # rough      olive (~vehicle: never co-occur)
+V14_V4[7]  = (128,   0, 128)   # road       purple (~person: weakest link, 180 apart)
+V14_V4[8]  = (  0, 128, 128)   # pavement   teal (~sidewalk: both preferred)
+V14_V4[9]  = (128, 128, 255)   # stairs     periwinkle (~water: never co-occur)
+V14_V4[11] = (255, 128, 128)   # vegetation salmon (~obstacle: both no-go)
+
+
 def v14_palette(version: int = 1):
     """[14, 3] float in [0,1] — import torch lazily so cpu-only tools work."""
     import torch
-    if int(version) == 3:
+    if int(version) == 4:
+        cols = [list(c) for c in V14_V4]
+    elif int(version) == 3:
         cols = [list(c) for c in V14_V3]
     else:
         cols = [list(c) for _, c, _ in V14]
