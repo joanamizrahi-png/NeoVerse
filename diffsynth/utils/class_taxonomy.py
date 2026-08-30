@@ -49,13 +49,41 @@ V14_V2_OVERRIDES = {
 }
 
 
+# Palette v3 (2026-08-29, Joana: "why not globally optimal?"): the exact
+# 14-point max-min packing of the RGB cube — 8 corners + 6 face centers,
+# minimum pairwise distance ~181 (vs v2's 76, v1's 39). Corner hues keep
+# what intuition they can (grass green, water blue, obstacle red, person
+# magenta, sidewalk cyan carries over from v2); the 6 mid-tone face centers
+# take the remaining classes. Colors are codes; renders colorize via the
+# canonical id->name map either way.
+V14_V3 = [
+    (  0,   0,   0),   # 0  void       corner: black
+    (255, 255, 255),   # 1  sky        corner: white
+    (255, 128, 128),   # 2  trail      face:   salmon
+    (  0, 255,   0),   # 3  grass      corner: green
+    (128,   0, 128),   # 4  rough      face:   purple
+    (  0,   0, 255),   # 5  water      corner: blue
+    (  0, 255, 255),   # 6  sidewalk   corner: cyan
+    (128, 128,   0),   # 7  road       face:   olive
+    (128, 128, 255),   # 8  pavement   face:   periwinkle
+    (  0, 128, 128),   # 9  stairs     face:   teal
+    (255,   0,   0),   # 10 obstacle   corner: red
+    (128, 255, 128),   # 11 vegetation face:   light green
+    (255,   0, 255),   # 12 person     corner: magenta
+    (255, 255,   0),   # 13 vehicle    corner: yellow
+]
+
+
 def v14_palette(version: int = 1):
     """[14, 3] float in [0,1] — import torch lazily so cpu-only tools work."""
     import torch
-    cols = [list(c) for _, c, _ in V14]
-    if int(version) == 2:
-        for i, c in V14_V2_OVERRIDES.items():
-            cols[i] = list(c)
+    if int(version) == 3:
+        cols = [list(c) for c in V14_V3]
+    else:
+        cols = [list(c) for _, c, _ in V14]
+        if int(version) == 2:
+            for i, c in V14_V2_OVERRIDES.items():
+                cols[i] = list(c)
     return torch.tensor(cols, dtype=torch.float32) / 255.0
 
 
