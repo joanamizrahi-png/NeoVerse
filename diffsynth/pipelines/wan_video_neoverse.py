@@ -1264,6 +1264,15 @@ class WanVideoUnit_4DEmbedder(PipelineUnit):
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 save_video(video, output_path, fps=15)
 
+            # v25 DINO hint (inert unless pipe.dino_hint_channels > 0): frozen
+            # DINOv2 features of the PIXEL-space splat render, computed before
+            # preprocess_video shifts it to [-1,1]. Runs in both training and
+            # inference (this unit is on both paths); consumed by model_fn.
+            dino_hint = None
+            if getattr(pipe, "dino_hint_channels", 0) > 0:
+                from ..utils.dino_hint import compute_dino_hint
+                dino_hint = compute_dino_hint(pipe, target_rgb)
+
             target_rgb = pipe.preprocess_video(target_rgb)
             target_rgb_latents = pipe.vae.encode(target_rgb, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
 
@@ -1329,6 +1338,7 @@ class WanVideoUnit_4DEmbedder(PipelineUnit):
                 "target_camera_embed": target_camera_embed.to(dtype=pipe.torch_dtype, device=pipe.device),
                 "target_mask": rearrange(target_mask, "B T H W C -> B T C H W").to(dtype=pipe.torch_dtype, device=pipe.device),
                 "target_semantic": target_semantic_latents,   # None on RGB-only runs
+                "dino_hint": dino_hint,                       # None unless v25 DINO runs
             }
         else:
             return {}
@@ -1426,6 +1436,7 @@ def model_fn_wan_video(
     target_camera_embed = None,
     target_mask = None,
     target_semantic = None,       # SEMANTIC FINETUNE: optional VAE-encoded semantic latent
+    dino_hint = None,             # v25: DINOv2 features of the splat render [B,384,T,H/8,W/8]
     use_gradient_checkpointing: bool = False,
     use_gradient_checkpointing_offload: bool = False,
     control_camera_latents_input = None,
@@ -1458,6 +1469,11 @@ def model_fn_wan_video(
     ], dim=-1).reshape(f * h * w, 1, -1).to(x.device)
 
     if target_rgb is not None:
+        # v25 DINO hint: stash on the embedding for this forward; its forward()
+        # consumes-and-clears, so no staleness across steps or the vanilla-mode
+        # RGB-preservation reference pass (which skips the hint by design).
+        if dino_hint is not None:
+            control_branch.control_patch_embedding._dino_feats = dino_hint
         # NOTE: kwargs after `freqs` — the controller's forward() gained a new
         # `target_semantic_latents=None` positional param between `freqs` and
         # `use_gradient_checkpointing`. Passing by name keeps this callsite robust to

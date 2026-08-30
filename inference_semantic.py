@@ -114,6 +114,19 @@ def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) ->
         print(f"  instantiated semantic_class_head (num_classes={final_w.shape[0]}, "
               f"hidden={final_w.shape[1]}, depth={depth})")
 
+    # v25: DINO-hint checkpoints carry control_patch_embedding.dino_proj.*.
+    # Auto-attach the projection from the checkpoint's own shape BEFORE the
+    # loader below runs, or strict=False silently amputates the DINO pathway
+    # (the v5 trap, third edition). Also flips pipe.dino_hint_channels on so
+    # the 4DEmbedder unit computes features at render time.
+    cb_state = by_module.get("control_branch", {})
+    dino_w = cb_state.get("control_patch_embedding.dino_proj.weight", None)
+    if dino_w is not None:
+        from diffsynth.utils.dino_hint import attach_dino_hint
+        attach_dino_hint(pipe.control_branch, dino_dim=dino_w.shape[1])
+        pipe.dino_hint_channels = int(dino_w.shape[1])
+        print(f"  attached DINO hint projection (dino_dim={dino_w.shape[1]})")
+
     for name, submodule_state in by_module.items():
         target = getattr(pipe, name, None)
         if target is None or not hasattr(target, "load_state_dict"):

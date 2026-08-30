@@ -328,7 +328,17 @@ class SplitControlPatchEmbedding(torch.nn.Module):
         )
         if getattr(self, "vanilla_mode", False):
             return self.base(base_x)
-        return self.base(base_x) + self.sem(sem_x)
+        out = self.base(base_x) + self.sem(sem_x)
+        # v25 DINO hint: inert unless attach_dino_hint() installed dino_proj
+        # AND model_fn stashed features for this forward. Consumed once so a
+        # forward without a fresh stash can never reuse stale features.
+        dino_proj = getattr(self, "dino_proj", None)
+        dino_feats = getattr(self, "_dino_feats", None)
+        if dino_proj is not None and dino_feats is not None:
+            out = out + dino_proj(dino_feats.to(
+                device=dino_proj.weight.device, dtype=dino_proj.weight.dtype))
+            self._dino_feats = None
+        return out
 
     @property
     def weight(self):
