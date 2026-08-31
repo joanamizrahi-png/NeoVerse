@@ -34,6 +34,11 @@ def main():
     ap.add_argument("--labels_dir",
                     default="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam3_labels_v14")
     ap.add_argument("--max_sessions", type=int, default=20)
+    ap.add_argument("--window_back", type=int, default=1,
+                    help="1 = last window per session, 2 = second-to-last, ... "
+                         "(2026-08-31: widen the val jury beyond 2 clips; "
+                         "training diets take the FIRST 6, so back<=2 with "
+                         "min_windows>=8 stays disjoint)")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -61,7 +66,9 @@ def main():
         r0, r1 = max(runs, key=lambda r: r[1] - r[0])
         if (r1 - r0) < args.min_windows * N_FRAMES:
             continue                          # too short: could collide with
-        w0 = r1 - N_FRAMES                    # front-picked training windows
+        w0 = r1 - args.window_back * N_FRAMES  # back from the run's end
+        if w0 < r0:
+            continue
         name = f"sanpoval_{s.name[:10]}_{idx[w0]:06d}"
         clip_p = clips_dir / f"{name}.mp4"
         lab_p = labels_dir / f"{name}.npz"
