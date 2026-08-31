@@ -28,7 +28,7 @@ echo "commit: $(git log --oneline -1)"
 
 grep -q "dino_hint_channels: 384" training/configs/train_semantic_v25LL_dino.yaml \
     || { echo "[sanity] FATAL: v25LL config missing dino_hint_channels"; exit 1; }
-grep -q "runs/train_semantic_v25_dino/checkpoint-epoch-30" training/configs/train_semantic_v25LL_dino.yaml \
+grep -q "runs/train_semantic_v25L_dino/checkpoint-epoch-30" training/configs/train_semantic_v25LL_dino.yaml \
     || { echo "[sanity] FATAL: v25LL warm-start path wrong"; exit 1; }
 test -f /scratch/m000204-pm06b/joana/runs/train_semantic_v25L_dino/checkpoint-epoch-30.safetensors \
     || { echo "[sanity] FATAL: v25 epoch-30 checkpoint missing"; exit 1; }
