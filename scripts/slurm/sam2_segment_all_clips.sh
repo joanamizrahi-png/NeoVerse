@@ -34,9 +34,22 @@ echo "commit: $(git log --oneline -1)"
 # a flat glob finds nothing (job 406381's 80-second failure). Recursive find
 # works regardless of layout; clip stem must equal the dataloader's scene id,
 # which holds because the same mp4 basenames feed the SAM3 labeler.
-CLIPS_ROOT=/scratch/m000204-pm06b/joana/combined_train_data
-mapfile -t CLIPS < <(find "$CLIPS_ROOT" -name "*.mp4" | sort)
-echo "found ${#CLIPS[@]} clips under $CLIPS_ROOT"
+# CLIPS_ROOT is a knob (2026-09-01). The default is the RUGD root, which is
+# why the 287 SANPO campus clips have no segments — and therefore why
+# semantic_seg_loss never fires on the campus-only runs (v26/v28) while it does
+# on every RUGD run. Point this at data/sanpo_v26 to fill that gap.
+# SHARD/NSHARD split the list across parallel jobs (287 clips x ~5 min is a
+# GPU-day on one node). Per-clip skip makes every shard safely resumable.
+CLIPS_ROOT=${CLIPS_ROOT:-/scratch/m000204-pm06b/joana/combined_train_data}
+mapfile -t ALL < <(find "$CLIPS_ROOT" -name "*.mp4" | sort)
+SHARD=${SHARD:-0}
+NSHARD=${NSHARD:-1}
+CLIPS=()
+for i in "${!ALL[@]}"; do
+    if [ $((i % NSHARD)) -eq "$SHARD" ]; then CLIPS+=("${ALL[$i]}"); fi
+done
+echo "shard $SHARD/$NSHARD -> ${#CLIPS[@]} of ${#ALL[@]} clips"
+echo "root: $CLIPS_ROOT"
 if [ "${#CLIPS[@]}" -eq 0 ]; then
     echo "FATAL: no .mp4 under $CLIPS_ROOT"; exit 1
 fi
