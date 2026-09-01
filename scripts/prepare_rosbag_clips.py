@@ -40,8 +40,12 @@ def pick_topics(reader, image_topic, odom_topic):
     odos = {c.topic: c.msgtype for c in reader.connections if c.msgtype in ODOM_TYPES}
     if image_topic == "auto":
         assert imgs, f"no image topics; run --inspect. Topics: {[c.topic for c in reader.connections]}"
-        # prefer compressed color, avoid depth topics
-        ranked = sorted(imgs, key=lambda t: ("depth" in t, "compressed" not in t, t))
+        # prefer compressed color, avoid depth AND pano topics (the pano
+        # equirect stream is an image topic too — alphabetical tiebreak made
+        # it beat the zed front cam and a whole batch of "front" clips came
+        # out as squashed donuts; caught by her eyes 2026-08-31, gnd_AUd*)
+        ranked = sorted(imgs, key=lambda t: ("depth" in t, "pano" in t,
+                                             "compressed" not in t, t))
         image_topic = ranked[0]
     if odom_topic == "auto":
         odom_topic = sorted(odos)[0] if odos else None
