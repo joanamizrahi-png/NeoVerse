@@ -91,6 +91,9 @@ def main():
     ap.add_argument("--sam3_dir", required=True)
     ap.add_argument("--gt_dir", required=True)
     ap.add_argument("--clips_per_session", type=int, default=3)
+    ap.add_argument("--no_rugd", action="store_true",
+                    help="campus-only roots: do NOT symlink the RUGD "
+                         "flashcards (they are the only source of `trail`)")
     ap.add_argument("--max_void_frac", type=float, default=0.25,
                     help="skip windows whose mean void share exceeds this")
     args = ap.parse_args()
@@ -187,6 +190,14 @@ def main():
     meta = pd.read_csv(
         Path(args.v15_root) / "data" / "train" / "SpatialVID_HQ_metadata.csv")
     rugd = meta[meta["id"].astype(str).str.startswith("rugd_")]
+    if args.no_rugd:
+        # v26 (2026-09-01): campus-only diet. RUGD is the ONLY source of the
+        # `trail` class (16% of its pixels; SANPO's mapping never emits 2 or
+        # 4) — and the world model was relabelling campus asphalt as trail,
+        # which the strict traversability table then scored non-walkable.
+        # Dropping these 32 clips removes the vocabulary at the source.
+        print("[no_rugd] campus-only: skipping all rugd clips", flush=True)
+        rugd = rugd.iloc[0:0]
     rows, n_rugd = [], 0
     for _, row in rugd.iterrows():
         stem = str(row["id"])
