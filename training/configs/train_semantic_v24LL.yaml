@@ -1,0 +1,89 @@
+# v24LL (2026-09-01, her call): v24L CONTINUED — warm-start from v24L's
+# epoch-30, 30 more epochs (90 total on the palette-4 line, NO DINO).
+# Completes the 2x2 grid: {v24, v24L, v24LL} x {v25, v25L, v25LL} = compute
+# crossed with DINO conditioning. Also the no-DINO control for the RGB
+# degradation question (v25L's RGB looked worse than v21's in her goal-walk
+# A/B): if v24LL's RGB is fine and v25LL's isn't, DINO is the culprit; if
+# both degrade, long finetuning is.
+# Decode/render with PALETTE=4 and HEAD_DECODE=1.
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2
+semantic_x0_prediction: true
+
+semantic_ce_weight: 0.1
+semantic_ce_sigma_max: 1.0
+semantic_ce_latent_frames: 2
+semantic_ce_ignore_void: true
+semantic_ce_gt_only: true
+semantic_ce_class_weights: null
+semantic_seg_weight: 0.05
+num_semantic_classes: 14
+semantic_palette_version: 4
+
+semantic_loss_weight: 2.0
+rgb_preservation_weight: 1.0
+snr_gamma: 5.0
+
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/data/sanpo_v21/combined_train_data_v21", labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v21/sam3_labels_v21", target_labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v21/gt_labels_v21", segments_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam2_segments", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed})
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem,semantic_class_head"
+
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 8
+
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v24L/checkpoint-epoch-30.safetensors
+
+learning_rate: 1e-4
+num_epochs: 30
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v24LL
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v24LL_palette4_ep90
+wandb_mode: online
+
+debug_save_root: null
