@@ -27,7 +27,9 @@ echo "commit: $(git log --oneline -1)"
 # Guards: campus-only dataset must EXIST and must contain no rugd clips.
 CSV=/scratch/m000204-pm06b/joana/data/sanpo_v26/combined_train_data_v21/data/train/SpatialVID_HQ_metadata.csv
 test -f "$CSV" || { echo "[sanity] FATAL: v26 dataset missing (is 459173 done?)"; exit 1; }
-grep -q "^rugd" "$CSV" && { echo "[sanity] FATAL: rugd clips leaked into the campus-only dataset"; exit 1; }
+if grep -q "^rugd" "$CSV"; then
+    echo "[sanity] FATAL: rugd clips leaked into the campus-only dataset"; exit 1
+fi
 echo "[sanity] campus-only clips: $(( $(wc -l < "$CSV") - 1 ))"
 grep -q "sanpo_v26" training/configs/train_semantic_v28_campus_dino.yaml \
     || { echo "[sanity] FATAL: config not pointing at the v26 roots"; exit 1; }
