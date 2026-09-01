@@ -21,10 +21,13 @@
 set -euo pipefail
 module load conda/24.3.0-0
 module load cuda12.9/toolkit/12.9.1
-export PATH=/users/jmizrahi/.conda/envs/neoverse/bin:$PATH
 export PYTHONNOUSERSITE=1
-hash -r
 export HF_HUB_DISABLE_PROGRESS_BARS=1
+# SAM3 lives in its own conda env (transformers with Sam3Model); the
+# reconstructor/poses stack lives in neoverse. Using the wrong one crashed
+# 458194 (ImportError: Sam3Model) — pick per step, matching sam3_new_clips.sh.
+SAM3PY=/users/jmizrahi/.conda/envs/sam3/bin/python
+NEOPY=/users/jmizrahi/.conda/envs/neoverse/bin/python
 
 S=${SCENE:-gnd_AUpano01}
 CLIP_DIR=/scratch/m000204-pm06b/joana/data/rugd_clips
@@ -39,11 +42,11 @@ done
 
 for V in "" _pano_yaw090 _pano_yaw270; do
     echo "==> SAM3 labeling ${S}${V}"
-    python sam3_precompute_labels.py --input_path "$CLIP_DIR/${S}${V}.mp4"
+    "$SAM3PY" sam3_precompute_labels.py --input_path "$CLIP_DIR/${S}${V}.mp4"
 done
 
 echo "==> remap to v14"
-python scripts/remap_labels_to_v14.py --dirs outputs/sam3_labels
+"$SAM3PY" scripts/remap_labels_to_v14.py --dirs outputs/sam3_labels
 
 for V in "" _pano_yaw090 _pano_yaw270; do
     test -f "outputs/sam3_labels_v14/${S}${V}.npz" \
@@ -52,7 +55,7 @@ done
 
 echo "==> reconstructor poses for ${S}"
 cd /scratch/m000204-pm06b/joana/nav-rl
-python scripts/extract_poses.py \
+"$NEOPY" scripts/extract_poses.py \
     --videos "$CLIP_DIR/${S}.mp4" \
     --output_dir /scratch/m000204-pm06b/joana/outputs/poses \
     --reconstructor_path /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt \
