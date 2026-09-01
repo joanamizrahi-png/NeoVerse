@@ -63,6 +63,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         snr_gamma: float = 0.0,                # v10 candidate: min-SNR timestep weighting cap (0 = off)
         semantic_analog_bits: bool = False,    # Track B: 4-bit class codes at latent res replace colorize+VAE (semantic_channels must be 4)
         dino_hint_channels: int = 0,           # v25: frozen-DINOv2 hint into the control branch (0 = off; 384 = ViT-S)
+        dino_sem_head_only: bool = False,      # v27: route that hint to the SEMANTIC HEAD only (RGB path untouched)
     ):
         super().__init__()
         # Load models. If distill_lora_path is set, the distill LoRA is merged
@@ -169,9 +170,19 @@ class WanTrainingModule(DiffusionTrainingModule):
             if int(dino_hint_channels) > 0:
                 assert semantic_expansion_version == 2, \
                     "dino_hint_channels requires semantic_expansion_version: 2"
-                from diffsynth.utils.dino_hint import attach_dino_hint
-                attach_dino_hint(self.pipe.control_branch,
-                                 dino_dim=int(dino_hint_channels))
+                if dino_sem_head_only:
+                    # v27 (2026-09-01): hint reaches ONLY the semantic output
+                    # channels — the v25 shared-embedding wiring destroyed RGB
+                    # (v24L vs v25L at equal compute, her eyes).
+                    from diffsynth.utils.dino_hint import attach_dino_sem_head
+                    attach_dino_sem_head(self.pipe.dit,
+                                         dino_dim=int(dino_hint_channels))
+                    print("  DINO hint -> SEMANTIC HEAD ONLY (dit.head.head."
+                          "dino_proj); RGB path untouched", flush=True)
+                else:
+                    from diffsynth.utils.dino_hint import attach_dino_hint
+                    attach_dino_hint(self.pipe.control_branch,
+                                     dino_dim=int(dino_hint_channels))
                 self.pipe.dino_hint_channels = int(dino_hint_channels)
 
         # Reset training scheduler
@@ -299,6 +310,7 @@ if __name__ == "__main__":
         num_semantic_classes=int(getattr(args, "num_semantic_classes", 30)),
         semantic_palette_version=int(getattr(args, "semantic_palette_version", 1)),
         dino_hint_channels=int(getattr(args, "dino_hint_channels", 0)),
+        dino_sem_head_only=bool(getattr(args, "dino_sem_head_only", False)),
     )
     # SEMANTIC FINETUNE debug: set `debug_save_root: /path/dir` in the config to make
     # 4DPreprocesser dump gt.mp4 + gt_semantic_hint.mp4 + gt_semantic_target.mp4 for

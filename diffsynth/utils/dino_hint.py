@@ -101,3 +101,43 @@ def attach_dino_hint(control_branch, dino_dim: int = 384):
     cpe.dino_proj = proj
     cpe._dino_feats = None
     return control_branch
+
+
+def attach_dino_sem_head(dit, dino_dim: int = 384):
+    """v27 (2026-09-01): add a zero-init dino_proj to dit.head.head (a
+    SplitHead) so the DINO hint reaches ONLY the semantic output channels.
+
+    Why: attach_dino_hint above feeds the control branch's SHARED embedding,
+    which conditions the whole DiT — measured cost (v24L vs v25L at equal
+    compute, her eyes): semantics improved while the RGB world stopped being
+    real (buses/people/texture erased). SplitHead.forward adds this hint to
+    sem_flat only; base_flat (RGB) never sees it.
+
+    Attaches IN PLACE — no wrapper module, so state-dict keys stay
+    `head.head.base.*` / `head.head.sem.*` and a warm start from a non-DINO
+    checkpoint still loads its semantic head (wrapping would rename them and
+    strict=False would silently amputate it).
+
+    Idempotent. Call AFTER expand_dit_for_semantics_v2, BEFORE freeze /
+    checkpoint load. Trainable path: `dit.head.head.dino_proj`.
+    """
+    from .semantics import SplitHead
+    head = dit.head.head
+    assert isinstance(head, SplitHead), (
+        "DINO sem-head hint requires semantic_expansion_version: 2 "
+        "(SplitHead); got " + type(head).__name__)
+    if getattr(head, "dino_proj", None) is not None:
+        return dit
+    pe = dit.patch_embedding
+    base_conv = getattr(pe, "base", pe)                  # SplitPatchEmbedding
+    proj = torch.nn.Conv3d(
+        dino_dim, head.sem.out_features,
+        kernel_size=base_conv.kernel_size, stride=base_conv.stride,
+    ).to(head.sem.weight.device, head.sem.weight.dtype)
+    with torch.no_grad():
+        proj.weight.zero_()
+        if proj.bias is not None:
+            proj.bias.zero_()
+    head.dino_proj = proj
+    head._dino_feats = None
+    return dit

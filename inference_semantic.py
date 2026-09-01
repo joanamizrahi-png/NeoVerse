@@ -127,6 +127,17 @@ def _load_finetune_checkpoint(pipe: WanVideoNeoVersePipeline, ckpt_path: str) ->
         pipe.dino_hint_channels = int(dino_w.shape[1])
         print(f"  attached DINO hint projection (dino_dim={dino_w.shape[1]})")
 
+    # v27: sem-head-only checkpoints carry head.head.dino_proj.* on the DiT.
+    # Same amputation trap, different module — wrap before the loader runs.
+    dit_state = by_module.get("dit", {})
+    dino_hw = dit_state.get("head.head.dino_proj.weight", None)
+    if dino_hw is not None:
+        from diffsynth.utils.dino_hint import attach_dino_sem_head
+        attach_dino_sem_head(pipe.dit, dino_dim=dino_hw.shape[1])
+        pipe.dino_hint_channels = int(dino_hw.shape[1])
+        print(f"  attached DINO SEM-HEAD projection "
+              f"(dino_dim={dino_hw.shape[1]}); RGB path untouched")
+
     for name, submodule_state in by_module.items():
         target = getattr(pipe, name, None)
         if target is None or not hasattr(target, "load_state_dict"):

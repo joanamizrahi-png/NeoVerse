@@ -279,6 +279,21 @@ class SplitHead(torch.nn.Module):
         # x: [B, N, dim]
         base_flat = self.base(x)                                     # [B, N, base_ch * p]
         sem_flat = self.sem(x)                                       # [B, N, sem_ch * p]
+        # v27 (2026-09-01): optional DINO hint, added to the SEMANTIC branch
+        # ONLY (attach_dino_sem_head + model_fn stash it here). The v25 wiring
+        # put it in the shared control embedding and destroyed RGB; base_flat
+        # above never sees it, so the RGB rows are untouched by construction.
+        # Consume-and-clear, like the control-branch variant.
+        feats = getattr(self, "_dino_feats", None)
+        if feats is not None:
+            self._dino_feats = None
+            d = self.dino_proj(feats.to(sem_flat.dtype))             # [B,C,f,h,w]
+            d = d.flatten(2).transpose(1, 2)                         # [B, N, C]
+            if d.shape[1] == sem_flat.shape[1]:
+                sem_flat = sem_flat + d
+            else:
+                print(f"[dino_sem_head] token mismatch {d.shape[1]} vs "
+                      f"{sem_flat.shape[1]}; hint skipped", flush=True)
         B, N, _ = base_flat.shape
         base_r = base_flat.view(B, N, self.p, self.base_ch)          # [B, N, p, base_ch]
         sem_r = sem_flat.view(B, N, self.p, self.sem_ch)             # [B, N, p, sem_ch]

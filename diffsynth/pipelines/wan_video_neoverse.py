@@ -1474,6 +1474,10 @@ def model_fn_wan_video(
         # RGB-preservation reference pass (which skips the hint by design).
         if dino_hint is not None:
             control_branch.control_patch_embedding._dino_feats = dino_hint
+            # v27: sem-head-only variant stashes on the DiT head instead —
+            # whichever module carries a _dino_feats slot consumes the hint.
+            if hasattr(dit.head.head, "_dino_feats"):
+                dit.head.head._dino_feats = dino_hint
         # NOTE: kwargs after `freqs` — the controller's forward() gained a new
         # `target_semantic_latents=None` positional param between `freqs` and
         # `use_gradient_checkpointing`. Passing by name keeps this callsite robust to
