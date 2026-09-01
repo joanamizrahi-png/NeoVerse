@@ -228,7 +228,15 @@ def main():
         row = dict(template)
         row.update({"id": name, "video path": f"{name}/{name}.mp4",
                     "annotation path": name, "num frames": N_FRAMES,
-                    "fps": 15})
+                    # fps here is METADATA ONLY — the dataset uses it as
+                    # annotation_interval = int(0.2*fps) in its length filter:
+                    #   keep row iff num_frames >= annotation_interval*80 + 1
+                    # At fps=15 that demanded 241 frames from our 81-frame
+                    # clips, so EVERY SANPO CLIP WAS SILENTLY DROPPED and every
+                    # semantics model to date (v21..v27S) trained on the 32 RUGD
+                    # clips alone. Our clips carry PER-FRAME labels, so the
+                    # honest value is one giving interval 1 (found 2026-09-01).
+                    "fps": 5})
         rows.append(row)
 
     pd.DataFrame(rows).to_csv(
