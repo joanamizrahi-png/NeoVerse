@@ -40,6 +40,17 @@ def main():
         if not c.isOpened():
             print(f"[skip] {label}: cannot open {p}")
             continue
+        # A file can open and still be unreadable. On the login node imageio
+        # silently falls back to the TIFF writer when its ffmpeg plugin is
+        # missing, producing an "mp4" whose frame count comes back as
+        # -9223372036854775808 — the panel then built a column of garbage
+        # instead of complaining (2026-09-02).
+        nf = int(c.get(cv2.CAP_PROP_FRAME_COUNT))
+        if nf <= 0:
+            print(f"[skip] {label}: frame count {nf} — not a readable video "
+                  f"({p}). Rewrite it with the neoverse env python.")
+            c.release()
+            continue
         caps.append(c)
         labels.append(label)
     if not caps:
