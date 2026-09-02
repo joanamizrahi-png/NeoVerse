@@ -41,6 +41,28 @@ def load(p: Path) -> np.ndarray:
     return np.asarray(d[key]).astype(np.int16)
 
 
+def assert_v14(p: Path) -> None:
+    """Refuse to score raw SAM3 prompt indices against v14 ground truth.
+
+    sam3_precompute_labels.py writes RAW indices to outputs/sam3_labels;
+    remap_labels_to_v14.py converts them and stamps class_names/num_classes.
+    Comparing the raw directory produces a confusion matrix that looks like a
+    catastrophically bad segmenter — sidewalk -> vehicle 86%, person -> void
+    97%, and sky correct because it happens to share an index. It cost us a
+    real scare on 2026-09-01, so this is now a hard stop rather than a number
+    somebody has to be suspicious of.
+    """
+    d = np.load(p, allow_pickle=True)
+    names = [str(x) for x in d["class_names"]] if "class_names" in d.files else None
+    if names != V14:
+        raise SystemExit(
+            f"{p} is NOT in the v14 label space "
+            f"(class_names={'absent' if names is None else names[:4]}...).\n"
+            f"These are raw SAM3 prompt indices. Remap first:\n"
+            f"    python scripts/remap_labels_to_v14.py --dirs <that dir>\n"
+            f"and point --pred_dir at <that dir>_v14.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred_dir", required=True)
@@ -52,10 +74,14 @@ def main():
     gts = sorted(Path(args.gt_dir).glob("*.npz"))
     conf = np.zeros((K, K), dtype=np.int64)     # rows = GT, cols = SAM3
     used = 0
+    checked = False
     for g in gts:
         p = Path(args.pred_dir) / g.name
         if not p.exists():
             continue
+        if not checked:
+            assert_v14(p)
+            checked = True
         gt, pr = load(g), load(p)
         if gt.shape != pr.shape:
             n = min(len(gt), len(pr))

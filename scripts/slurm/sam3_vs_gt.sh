@@ -52,8 +52,27 @@ for CLIP in "${CLIPS[@]}"; do
     python sam3_precompute_labels.py --input_path "$CLIP" --num_frames 81
 done
 
+# sam3_precompute_labels.py emits RAW prompt indices. They must be remapped
+# to v14 before they mean anything against SANPO GT — comparing the raw dir
+# produced a confusion matrix that looked like total model failure (2026-09-01).
+# Stage into a SEPARATE directory: remap writes <dir>_v14, and the real
+# sam3_labels_v14/ holds convert_sanpo_val's GT symlinks, which must not be
+# overwritten with predictions.
+STAGE=outputs/sam3_val_raw
+mkdir -p "$STAGE"
+N=0
+for CLIP in "${CLIPS[@]:0:$NCLIPS}"; do
+    STEM=$(basename "$CLIP" .mp4)
+    if [ -f "outputs/sam3_labels/${STEM}.npz" ]; then
+        cp -f "outputs/sam3_labels/${STEM}.npz" "$STAGE/"
+        N=$((N + 1))
+    fi
+done
+echo "staged $N raw label files -> $STAGE"
+python scripts/remap_labels_to_v14.py --dirs "$STAGE"
+
 python scripts/sam3_vs_gt.py \
-    --pred_dir outputs/sam3_labels \
+    --pred_dir "${STAGE}_v14" \
     --gt_dir "$VAL/labels" \
     --csv /scratch/m000204-pm06b/joana/outputs/SAM3_VS_GT_confusion.csv
 
