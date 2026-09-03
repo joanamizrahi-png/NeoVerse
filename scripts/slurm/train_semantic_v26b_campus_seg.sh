@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=train-sem-v26_campus
+#SBATCH --job-name=train-sem-v26b_campus_seg
 #SBATCH --account=marlowe-m000204-pm06b
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
-#SBATCH --time=24:00:00
+# 2026-09-03: 24:00:00 was NEVER ENOUGH. Measured from job 461267: 26.5 s/iter
+# x 287 iters = ~2h06m per epoch, so num_epochs 20 needs ~42 h. Job 460016
+# (the v26 line) died TIMEOUT at exactly 1-00:00:06 having reached epoch 10 --
+# that, not any failure, is why every downstream policy trains against v26
+# EPOCH 10 instead of a finished model. Override lower only for a smoke test.
+#SBATCH --time=48:00:00
 #SBATCH --exclude=n04,n13,n14,n17,n24
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v26b_campus_only_seg-%j.out
 #SBATCH --error=/scratch/m000204-pm06b/joana/slurm-train-sem-v26b_campus_only_seg-%j.err
@@ -14,7 +19,7 @@
 # header for why. Needs the v26 dataset build (job 459173) to have finished.
 
 set -euo pipefail
-mkdir -p /scratch/m000204-pm06b/joana/runs/train_semantic_v26_campus
+mkdir -p /scratch/m000204-pm06b/joana/runs/train_semantic_v26b_campus_seg
 module load conda/24.3.0-0
 module load cuda12.9/toolkit/12.9.1
 export PATH=/users/jmizrahi/.conda/envs/neoverse/bin:$PATH

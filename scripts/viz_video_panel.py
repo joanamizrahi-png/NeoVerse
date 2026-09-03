@@ -32,7 +32,18 @@ def quicktime_safe(path) -> None:
         exe = imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         exe = shutil.which("ffmpeg")
-    if not exe or not src.exists():
+    if not exe:
+        # Silent skip = green screen in QuickTime and no clue why. The base
+        # conda python has no imageio_ffmpeg (it lives in the neoverse env) and
+        # there is no system ffmpeg, so this fires often (2026-09-02).
+        print(f"[quicktime_safe] NO ENCODER -- {src.name} stays mp4v and will "
+              f"render as a GREEN SCREEN in QuickTime.\n"
+              f"  Re-encode with: $(/users/jmizrahi/.conda/envs/neoverse/bin/"
+              f"python -c 'import imageio_ffmpeg;"
+              f"print(imageio_ffmpeg.get_ffmpeg_exe())') "
+              f"-i {src.name} -c:v libx264 -pix_fmt yuv420p out.mp4")
+        return
+    if not src.exists():
         return
     tmp = src.with_suffix(".h264.mp4")
     try:
