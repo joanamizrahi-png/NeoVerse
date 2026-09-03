@@ -19,6 +19,34 @@ from pathlib import Path
 import numpy as np
 
 
+def quicktime_safe(path) -> None:
+    """Re-encode so QuickTime plays it. OpenCV here has no H.264 encoder and
+    falls back to mp4v, which QuickTime shows as a green screen (VLC is fine,
+    which is how it hid). imageio_ffmpeg ships a usable binary. -pix_fmt
+    yuv420p is required or QuickTime refuses even H.264."""
+    import shutil
+    import subprocess
+    src = Path(path)
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        exe = shutil.which("ffmpeg")
+    if not exe or not src.exists():
+        return
+    tmp = src.with_suffix(".h264.mp4")
+    try:
+        subprocess.run([exe, "-y", "-loglevel", "error", "-i", str(src),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp)],
+                       check=True, timeout=300)
+        if tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(src)
+    except Exception as e:
+        print(f"[quicktime_safe] left as-is ({e})")
+        if tmp.exists():
+            tmp.unlink()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", help="label=/path/to/video.mp4")
@@ -115,6 +143,7 @@ def main():
         c.release()
     if writer is not None:
         writer.release()
+        quicktime_safe(args.out)
     print(f"==> {args.out}")
 
 
