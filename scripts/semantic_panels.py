@@ -43,7 +43,18 @@ def main():
     tax_path = Path(__file__).resolve().parents[1] / "diffsynth" / "utils" / "class_taxonomy.py"
     spec = importlib.util.spec_from_file_location("class_taxonomy", tax_path)
     tax = importlib.util.module_from_spec(spec); spec.loader.exec_module(tax)
-    pal = tax.v14_palette(args.palette).numpy()          # [14, 3] in [0, 1]
+    # the raw colour tables, no torch: v14_palette() would import it
+    if int(args.palette) == 4:
+        cols = tax.V14_V4
+    elif int(args.palette) == 3:
+        cols = tax.V14_V3
+    else:
+        cols = [c for _, c, _ in tax.V14]
+        if int(args.palette) == 2:
+            cols = list(cols)
+            for i, c in tax.V14_V2_OVERRIDES.items():
+                cols[i] = c
+    pal = np.asarray(cols, dtype=np.float32) / 255.0      # [14, 3] in [0, 1]
 
     gt = np.load(args.gt)["labels"].astype(np.int64)
     names, dirs, preds = [], [], []
