@@ -36,9 +36,14 @@ def main():
     args = ap.parse_args()
 
     import cv2
-    import torch
-    from diffsynth.utils.semantics import set_active_palette, labels_to_rgb
-    set_active_palette(14, args.palette)
+    # Load the palette module by file path: importing `diffsynth` pulls in the
+    # whole package (transformers included), which fails on a login node with
+    # polluted user site-packages. class_taxonomy.py only needs numpy.
+    import importlib.util
+    tax_path = Path(__file__).resolve().parents[1] / "diffsynth" / "utils" / "class_taxonomy.py"
+    spec = importlib.util.spec_from_file_location("class_taxonomy", tax_path)
+    tax = importlib.util.module_from_spec(spec); spec.loader.exec_module(tax)
+    pal = tax.v14_palette(args.palette).numpy()          # [14, 3] in [0, 1]
 
     gt = np.load(args.gt)["labels"].astype(np.int64)
     names, dirs, preds = [], [], []
@@ -49,7 +54,7 @@ def main():
         names.append(name); dirs.append(Path(d)); preds.append(lab)
 
     def colour(ids):
-        return (labels_to_rgb(torch.from_numpy(ids)).numpy() * 255).astype(np.uint8)
+        return (pal[np.clip(ids, 0, len(pal) - 1)] * 255).astype(np.uint8)
 
     valid = gt != 0
     accs = [float((p[valid] == gt[valid]).mean()) for p in preds]
