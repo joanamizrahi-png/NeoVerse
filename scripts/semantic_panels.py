@@ -71,7 +71,7 @@ def main():
     accs = [float((p[valid] == gt[valid]).mean()) for p in preds]
 
     T, H, W = gt.shape
-    h, w = int(H * args.scale), int(W * args.scale)
+    h, w = int(H * args.scale) // 2 * 2, int(W * args.scale) // 2 * 2
     rgb = cv2.VideoCapture(str(dirs[0] / "rgb.mp4"))
     titles = ["RGB (" + names[0] + ")", "human GT"] + [f"{n}  acc {100 * a:.1f}%" for n, a in zip(names, accs)]
     cols = len(titles)
@@ -88,6 +88,19 @@ def main():
             cv2.putText(bar, ttl, (i * w + 4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
         out.write(np.concatenate([bar, row], axis=0))
     out.release()
+    # OpenCV's mp4v is not QuickTime-playable (green frame). Re-encode as
+    # H.264 yuv420p when ffmpeg is on the path; otherwise keep the mp4v file.
+    import shutil, subprocess, os
+    if shutil.which("ffmpeg"):
+        tmp = args.out + ".mp4v.mp4"
+        os.replace(args.out, tmp)
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p", "-crf", "18", args.out])
+        if r.returncode == 0:
+            os.remove(tmp)
+        else:
+            os.replace(tmp, args.out)
+            print("    (ffmpeg re-encode failed; kept the mp4v file)")
     print("==> " + args.out + "   " + "  ".join(f"{n} {100 * a:.1f}%" for n, a in zip(names, accs)))
 
 
