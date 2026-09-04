@@ -91,16 +91,25 @@ def main():
     # OpenCV's mp4v is not QuickTime-playable (green frame). Re-encode as
     # H.264 yuv420p when ffmpeg is on the path; otherwise keep the mp4v file.
     import shutil, subprocess, os
-    if shutil.which("ffmpeg"):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:                       # the neoverse env bundles a static ffmpeg
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg = None
+    if ffmpeg:
         tmp = args.out + ".mp4v.mp4"
         os.replace(args.out, tmp)
-        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264",
+        r = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264",
                             "-pix_fmt", "yuv420p", "-crf", "18", args.out])
         if r.returncode == 0:
             os.remove(tmp)
         else:
             os.replace(tmp, args.out)
             print("    (ffmpeg re-encode failed; kept the mp4v file)")
+    else:
+        print("    (no ffmpeg found; kept the mp4v file -- VLC opens it, QuickTime will not)")
     print("==> " + args.out + "   " + "  ".join(f"{n} {100 * a:.1f}%" for n, a in zip(names, accs)))
 
 
