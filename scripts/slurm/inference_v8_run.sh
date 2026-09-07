@@ -48,12 +48,19 @@ if [ "${HEAD_DECODE:-0}" = "1" ]; then EXTRA="--decode_with_head"; DECSUF="_head
 if [ "${BITS:-0}" = "1" ]; then EXTRA="$EXTRA --semantic_channels 4 --semantic_analog_bits"; DECSUF="${DECSUF}_bits"; fi
 # PALETTE=2: v22+ checkpoints trained on the separated v14 color set.
 if [ -n "${PALETTE:-}" ] && [ "${PALETTE}" != "1" ]; then EXTRA="$EXTRA --palette_version $PALETTE"; DECSUF="${DECSUF}_p${PALETTE}"; fi
+# STATIC=1: reconstruct the clip with every frame's Gaussians constant (the
+# v30 training conditioning); default = dynamic per-frame Gaussians (v26).
+if [ "${STATIC:-0}" = "1" ]; then EXTRA="$EXTRA --static_scene"; DECSUF="${DECSUF}_static"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
 else
     LABELS=outputs/sam3_labels/${CLIP}.npz
 fi
+# LABELS_FILE: explicit conditioning-label npz (e.g. a SANPO training clip's
+# sam3_labels_v21 file) instead of the sam3_labels_v14 lookup by CLIP name.
+[ -n "${LABELS_FILE:-}" ] && LABELS="$LABELS_FILE"
+[ -f "$LABELS" ] || { echo "==> no labels at $LABELS"; exit 1; }
 echo "commit: $(git log --oneline -1)"
 RUNS=/scratch/m000204-pm06b/joana/runs/${RUN_NAME}
 
