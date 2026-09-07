@@ -25,7 +25,7 @@ def VideoReader_contextmanager(*args, **kwargs):
 
 
 class SpatialVID(BaseDataset):
-    def __init__(self, ROOT, labels_dir=None, target_labels_dir=None, segments_dir=None, *args, **kwargs):
+    def __init__(self, ROOT, labels_dir=None, target_labels_dir=None, segments_dir=None, static_scene=False, *args, **kwargs):
         """
         Args:
             ROOT: SpatialVID root directory.
@@ -46,6 +46,11 @@ class SpatialVID(BaseDataset):
         # "segments" [N,H,W] int16, from sam2_precompute_segments.py). Feeds the
         # segment-homogeneity loss. None = no segments, loss stays off.
         self.segments_dir = segments_dir
+        # v30 (2026-09-07): STATIC reconstruction during training -- every context
+        # frame's Gaussians are constant and render at every target view, so the
+        # conditioning rasters are dense like the ones the RL env now renders
+        # (STATICSCENE=1). False = the per-frame (holey) rasters of v10-v29.
+        self.static_scene = bool(static_scene)
         super().__init__(*args, **kwargs)
         self.loaded_data = self._load_data()
 
@@ -127,7 +132,7 @@ class SpatialVID(BaseDataset):
                 dataset="SpatialVID",
                 video_name=scene_info["id"],
                 image_name=f"frame_{sample_index[v]:06d}",
-                is_static=False,
+                is_static=self.static_scene,
                 is_target=sample_index[v] not in sample_context_index,
                 timestamp=timestamp,
                 prompt=text_prompt,
