@@ -97,10 +97,39 @@ V14_V5 = list(V14_V4)
 V14_V5[12] = (255, 128, 0)     # person     orange
 
 
+# Palette v6 (2026-09-07, Joana: "it's better if our palette is optimal"):
+# TRAVERSABILITY-ORDERED. Searched over the 27-colour {0,128,255}^3 grid with
+# void black and sky white fixed, maximising the minimum RGB distance between
+# any WALKABLE class (trail, sidewalk, road, pavement) and any NO-GO class:
+# every walkable-vs-no-go pair is >= 255 apart (v4: 180, and road-person was
+# one such pair), every pair of classes >= 127, walkable-vs-rough >= 361.
+# Walkable classes share the warm corner (red / yellow / orange / green), no-go
+# classes the cool corner (cyan / blue / magenta / violet), so a confusion
+# between colour neighbours never crosses the walkable / no-go line.
+V14_V6 = [
+    (  0,   0,   0),   # 0  void       black (holes in the conditioning raster)
+    (255, 255, 255),   # 1  sky        white
+    (  0, 255,   0),   # 2  trail      green         WALKABLE
+    (128, 128, 255),   # 3  grass      lavender      no-go
+    (  0,   0, 255),   # 4  rough      blue          graded (0.35)
+    (128,   0, 255),   # 5  water      violet        no-go
+    (255, 255,   0),   # 6  sidewalk   yellow        WALKABLE
+    (255,   0,   0),   # 7  road       red           WALKABLE
+    (255, 128,   0),   # 8  pavement   orange        WALKABLE
+    (  0, 128, 255),   # 9  stairs     azure         no-go
+    (  0, 255, 255),   # 10 obstacle   cyan          no-go
+    (128, 255, 255),   # 11 vegetation pale cyan     no-go
+    (255,   0, 255),   # 12 person     magenta       no-go
+    (255, 128, 255),   # 13 vehicle    pink          no-go
+]
+
+
 def v14_palette(version: int = 1):
     """[14, 3] float in [0,1] — import torch lazily so cpu-only tools work."""
     import torch
-    if int(version) == 5:
+    if int(version) == 6:
+        cols = [list(c) for c in V14_V6]
+    elif int(version) == 5:
         cols = [list(c) for c in V14_V5]
     elif int(version) == 4:
         cols = [list(c) for c in V14_V4]
