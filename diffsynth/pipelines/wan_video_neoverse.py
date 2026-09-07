@@ -731,12 +731,14 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         occlusion_thresh=0.1,
         alpha_thresh=0.5,
         color_thresh=[50, 100],
+        static_movers=(),          # class ids kept per-frame in static mode (see rasterizer.dynamic_label_ids)
         **kwargs,
     ):
         super().__init__(
             input_params=("source_views", "target_rgb", "target_depth", "target_mask", "target_poses", "target_intrs", "target_semantic"),
             onload_model_names=("reconstructor",)
         )
+        self.static_movers = tuple(int(v) for v in (static_movers or ()))
         self.novel_view_sampling_trans = novel_view_sampling_trans
         self.novel_view_sampling_max_rot = novel_view_sampling_max_rot
         self.culling_prob = culling_prob
@@ -826,6 +828,10 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             }
 
         pipe.load_models_to_device(self.onload_model_names)
+        _rast = pipe.reconstructor.gs_renderer.rasterizer
+        if tuple(getattr(_rast, "dynamic_label_ids", ())) != self.static_movers:
+            _rast.dynamic_label_ids = self.static_movers
+            print(f"[NeoVerse] static movers (per-frame classes in static mode): {self.static_movers or 'off'}", flush=True)
         with torch.amp.autocast("cuda", dtype=pipe.torch_dtype):
             recon_output = pipe.reconstructor(source_views, is_inference=False)
         context_num = (~source_views["is_target"]).sum()
@@ -1053,6 +1059,14 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         """
         Degradation simulation via visibility-based Gaussian culling and average geometry filter.
         More details can be found in Section 3.2 of [NeoVerse](https://arxiv.org/abs/2601.00393).
+
+        2026-09-07: the Gaussian list of a sample is any mix of PER-FRAME sets
+        (timestamp = their context frame; dynamic mode, or the movers of the
+        static-movers mode) and CONSTANT sets (timestamp -1; static mode). A
+        per-frame set is culled against its own perturbed context view, as
+        before. A constant set is seen from every context view, so it is culled
+        ONCE by the union of what any view sees (jobs 470333/470334 died
+        indexing the single constant set per view).
         """
         batch_size = len(gaussians)
         novel_context_world2cam = homo_matrix_inverse(novel_context_poses)
@@ -1060,92 +1074,77 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         for b_idx in range(batch_size):
             gs_list = gaussians[b_idx]
             n_ctx = len(novel_context_poses[b_idx])
-            # STATIC scenes (views["is_static"]=True, v30 line): separate_splats
-            # fuses every frame's Gaussians into ONE constant set (timestamp -1),
-            # so gs_list has a single entry instead of one per context view and
-            # indexing it by s_idx raised IndexError (jobs 470333/470334). The
-            # shared set is culled ONCE at the end, keeping every Gaussian that is
-            # visible from AT LEAST ONE novel context pose; the average-geometry
-            # filter still moves the visible means per view (a Gaussian seen from
-            # two views takes the last view's smoothed depth).
-            shared = len(gs_list) < n_ctx
-            union_keep = {}
-            for s_idx in range(n_ctx):
-                cur_gaussian = gs_list[min(s_idx, len(gs_list) - 1)] if shared else gs_list[s_idx]
-                cur_extrinsic = novel_context_world2cam[b_idx][s_idx]
-                cur_intrinsic = context_intrinsics[b_idx][s_idx]
-                if cur_gaussian.means.shape[0] == 0:
-                    continue
-
-                # Project Gaussians to novel views
-                covars, _ = _quat_scale_to_covar_preci(
-                    cur_gaussian.rotations,
-                    cur_gaussian.scales,
-                    True,
-                    False,
-                    triu=False
-                )
-                radii, means2d, depths, conics, compensations = _fully_fused_projection(
-                    cur_gaussian.means,
-                    covars,
-                    cur_extrinsic[None],
-                    cur_intrinsic[None],
-                    w, h,
-                )
-                valid_gs_indices = torch.where((radii[0, :, 0] > 0) & (radii[0, :, 1] > 0))[0]
-                if len(valid_gs_indices) == 0:
-                    continue
-                gs_x = means2d[0, valid_gs_indices, 0].round().long().clamp(0, w - 1)
-                gs_y = means2d[0, valid_gs_indices, 1].round().long().clamp(0, h - 1)
-                gs_depths = depths[0, valid_gs_indices]
-
-                # Render depth map from the novel view and perform visibility check
-                rendered_depths, rendered_alphas, _ = rasterization(
-                    means=cur_gaussian.means,
-                    quats=cur_gaussian.rotations,
-                    scales=cur_gaussian.scales,
-                    opacities=cur_gaussian.opacities,
-                    colors=cur_gaussian.harmonics,
-                    viewmats=cur_extrinsic[None],
-                    Ks=cur_intrinsic[None],
-                    width=w,
-                    height=h,
-                    sh_degree=0,
-                    packed=False,
-                    render_mode="ED",
-                )
-                rendered_depths = rendered_depths[0, ..., 0]
-                visible_mask = (gs_depths < (rendered_depths[gs_y, gs_x] + occlusion_thresh))
-                visible_indices = valid_gs_indices[visible_mask]
-                if kernel_size == 0:
-                    # Visibility-based Gaussian Culling
-                    if shared:
-                        union_keep.setdefault(id(cur_gaussian), []).append(visible_indices)
-                    else:
-                        cur_gaussian.keep_indices(visible_indices)
-                else:
-                    # Average Geometry Filter
-                    smoothed_depths = average_filter(rendered_depths, kernel_size=kernel_size)
-                    smoothed_gs_depths = smoothed_depths[gs_y[visible_mask], gs_x[visible_mask]]
-                    visible_gs_x = gs_x[visible_mask]
-                    visible_gs_y = gs_y[visible_mask]
-
-                    # Convert pixel coordinates to world coordinates
-                    world_coords = pixel_to_world_coords(
-                        visible_gs_x, visible_gs_y, smoothed_gs_depths,
-                        cur_intrinsic, cur_extrinsic
-                    )
-                    cur_gaussian.means[visible_indices] = world_coords
-                    if shared:
-                        union_keep.setdefault(id(cur_gaussian), []).append(visible_indices)
-                    else:
-                        cur_gaussian.keep_indices(visible_indices)
-            if shared:
-                for g in gs_list:
-                    parts = union_keep.get(id(g))
-                    if parts:
-                        g.keep_indices(torch.unique(torch.cat(parts)))
+            per_frame = [g for g in gs_list if int(getattr(g, "timestamp", -1)) != -1]
+            constant = [g for g in gs_list if int(getattr(g, "timestamp", -1)) == -1]
+            for s_idx in range(min(n_ctx, len(per_frame))):
+                vis = self._visible_indices(per_frame[s_idx], novel_context_world2cam[b_idx][s_idx],
+                                            context_intrinsics[b_idx][s_idx], h, w, kernel_size, occlusion_thresh)
+                if vis is not None:
+                    per_frame[s_idx].keep_indices(vis)
+            for g in constant:
+                parts = []
+                for s_idx in range(n_ctx):
+                    vis = self._visible_indices(g, novel_context_world2cam[b_idx][s_idx],
+                                                context_intrinsics[b_idx][s_idx], h, w, kernel_size, occlusion_thresh)
+                    if vis is not None:
+                        parts.append(vis)
+                if parts:
+                    g.keep_indices(torch.unique(torch.cat(parts)))
         return gaussians
+
+    def _visible_indices(self, cur_gaussian, cur_extrinsic, cur_intrinsic, h, w, kernel_size, occlusion_thresh):
+        """Indices of cur_gaussian visible from one view (None = nothing to do).
+        With kernel_size > 0 also moves the visible means onto the smoothed
+        rendered depth (the average geometry filter), in place."""
+        if cur_gaussian.means.shape[0] == 0:
+            return None
+        covars, _ = _quat_scale_to_covar_preci(
+            cur_gaussian.rotations,
+            cur_gaussian.scales,
+            True,
+            False,
+            triu=False
+        )
+        radii, means2d, depths, conics, compensations = _fully_fused_projection(
+            cur_gaussian.means,
+            covars,
+            cur_extrinsic[None],
+            cur_intrinsic[None],
+            w, h,
+        )
+        valid_gs_indices = torch.where((radii[0, :, 0] > 0) & (radii[0, :, 1] > 0))[0]
+        if len(valid_gs_indices) == 0:
+            return None
+        gs_x = means2d[0, valid_gs_indices, 0].round().long().clamp(0, w - 1)
+        gs_y = means2d[0, valid_gs_indices, 1].round().long().clamp(0, h - 1)
+        gs_depths = depths[0, valid_gs_indices]
+
+        rendered_depths, rendered_alphas, _ = rasterization(
+            means=cur_gaussian.means,
+            quats=cur_gaussian.rotations,
+            scales=cur_gaussian.scales,
+            opacities=cur_gaussian.opacities,
+            colors=cur_gaussian.harmonics,
+            viewmats=cur_extrinsic[None],
+            Ks=cur_intrinsic[None],
+            width=w,
+            height=h,
+            sh_degree=0,
+            packed=False,
+            render_mode="ED",
+        )
+        rendered_depths = rendered_depths[0, ..., 0]
+        visible_mask = (gs_depths < (rendered_depths[gs_y, gs_x] + occlusion_thresh))
+        visible_indices = valid_gs_indices[visible_mask]
+        if kernel_size != 0:
+            smoothed_depths = average_filter(rendered_depths, kernel_size=kernel_size)
+            smoothed_gs_depths = smoothed_depths[gs_y[visible_mask], gs_x[visible_mask]]
+            world_coords = pixel_to_world_coords(
+                gs_x[visible_mask], gs_y[visible_mask], smoothed_gs_depths,
+                cur_intrinsic, cur_extrinsic
+            )
+            cur_gaussian.means[visible_indices] = world_coords
+        return visible_indices
 
 
 class WanVideoUnit_CameraProcesser(PipelineUnit):

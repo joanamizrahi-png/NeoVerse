@@ -87,10 +87,22 @@ V14_V4[9]  = (128, 128, 255)   # stairs     periwinkle (~water: never co-occur)
 V14_V4[11] = (255, 128, 128)   # vegetation salmon (~obstacle: both no-go)
 
 
+# Palette v5 (2026-09-07, Joana): v4 with PERSON moved off the road hue.
+# In v4 road (128,0,128) and person (255,0,255) differ only in brightness and
+# the reader painted person over the near ground on static renders. Orange's
+# nearest colours are vegetation salmon, obstacle red and vehicle yellow --
+# all no-go, so any confusion is harmless; road keeps purple with only water
+# and stairs nearby.
+V14_V5 = list(V14_V4)
+V14_V5[12] = (255, 128, 0)     # person     orange
+
+
 def v14_palette(version: int = 1):
     """[14, 3] float in [0,1] — import torch lazily so cpu-only tools work."""
     import torch
-    if int(version) == 4:
+    if int(version) == 5:
+        cols = [list(c) for c in V14_V5]
+    elif int(version) == 4:
         cols = [list(c) for c in V14_V4]
     elif int(version) == 3:
         cols = [list(c) for c in V14_V3]

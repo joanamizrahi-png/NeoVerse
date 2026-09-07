@@ -51,6 +51,8 @@ if [ -n "${PALETTE:-}" ] && [ "${PALETTE}" != "1" ]; then EXTRA="$EXTRA --palett
 # STATIC=1: reconstruct the clip with every frame's Gaussians constant (the
 # v30 training conditioning); default = dynamic per-frame Gaussians (v26).
 if [ "${STATIC:-0}" = "1" ]; then EXTRA="$EXTRA --static_scene"; DECSUF="${DECSUF}_static"; fi
+# MOVERS=12,13 (with STATIC=1): those classes stay per-frame -- no trails.
+if [ -n "${MOVERS:-}" ]; then EXTRA="$EXTRA --static_movers $MOVERS"; DECSUF="${DECSUF}_movers${MOVERS//,/-}"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models

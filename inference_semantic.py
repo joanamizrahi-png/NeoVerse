@@ -297,6 +297,7 @@ def semantic_inference(
     disable_semantic_channels: bool = False,
     alpha_threshold: float = 1.0,
     static_scene: bool = False,
+    static_movers=(),                      # class ids kept per-frame in static mode (12 person, 13 vehicle)
     append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
     append_views_timestamp: int = 40,      # scene-time the appended dream commits to
     append_views_stride: int = 1,          # subsample appended views (VRAM guard)
@@ -478,7 +479,13 @@ def semantic_inference(
     }
     if static_scene:
         views["is_static"] = torch.ones((1, len(images)), dtype=torch.bool, device=device)
-        views["timestamp"] = torch.zeros((1, len(images)), dtype=torch.int64, device=device)
+        # Movers are per-frame Gaussians and are drawn at their own frame's
+        # time, so with static movers the clock must be the frame index (as in
+        # training); all-zero timestamps would draw every frame's walker at once.
+        if static_movers:
+            views["timestamp"] = torch.arange(len(images), dtype=torch.int64, device=device).unsqueeze(0)
+        else:
+            views["timestamp"] = torch.zeros((1, len(images)), dtype=torch.int64, device=device)
     else:
         # Appended dream views commit as STATIC geometry (visible at all
         # times, no dynamic-timestamp bookkeeping — which also asserts
@@ -527,6 +534,10 @@ def semantic_inference(
         # priors unless the matching flag is up (2am find: poses rode along
         # unread — sum(cond_flags)>0 gates extract_priors entirely).
         cf = [0, 0, 1] if "camera_poses" in views else [0, 0, 0]
+        _rast = pipe.reconstructor.gs_renderer.rasterizer
+        _rast.dynamic_label_ids = tuple(static_movers or ())
+        if static_movers:
+            print(f"[inference] static movers: classes {tuple(static_movers)} stay per-frame", flush=True)
         predictions = pipe.reconstructor(views, cond_flags=cf,
                                          is_inference=True, use_motion=False)
 
@@ -829,6 +840,7 @@ def parse_args():
     p.add_argument("--disable_lora", action="store_true",
                    help="Skip Wan's 4-step distilled LoRA (slower but sometimes cleaner)")
     p.add_argument("--static_scene", action="store_true")
+    p.add_argument("--static_movers", default="", help='class ids kept PER-FRAME in --static_scene mode, e.g. "12,13" (person, vehicle): no trails')
     p.add_argument("--append_views_dir", default=None,
                    help="DREAM LIFT pilot: dir with a generated sweep's rgb.mp4 "
                         "(+semantic_labels.npz) to append as reconstruction views")
@@ -931,6 +943,7 @@ def main():
                 num_frames=args.num_frames, width=args.width, height=args.height,
                 resize_mode=args.resize_mode, seed=args.seed,
                 use_lora=not args.disable_lora, static_scene=args.static_scene,
+                static_movers=tuple(int(v) for v in args.static_movers.split(",") if v.strip()),
                 semantic_channels=args.semantic_channels,
                 semantic_expansion_version=args.semantic_expansion_version,
                 semantic_x0_prediction=args.semantic_x0_prediction,
@@ -965,6 +978,7 @@ def main():
         seed=args.seed,
         use_lora=not args.disable_lora,
         static_scene=args.static_scene,
+        static_movers=tuple(int(v) for v in args.static_movers.split(",") if v.strip()),
         append_views_dir=args.append_views_dir,
         append_views_timestamp=args.append_views_timestamp,
         append_views_stride=args.append_views_stride,

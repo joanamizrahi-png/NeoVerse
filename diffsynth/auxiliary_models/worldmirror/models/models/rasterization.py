@@ -445,8 +445,14 @@ class GaussianSplatRenderer(nn.Module):
         dynamic_threshold2: float = 0.0,  # Second dynamic threshold after global motion tracking
         occlusion_threshold: float = 0.05,  # Depth threshold for occlusion checking
         bidirection: bool = True,
+        dynamic_label_ids=(),  # STATIC MOVERS (2026-09-07): in static mode, Gaussians whose
+                               # one-hot label is one of these class ids (e.g. 12 person, 13
+                               # vehicle) stay PER-FRAME instead of being fused into the constant
+                               # set -- a walker is drawn once per view where the target shows
+                               # them, not smeared as a trail over every view. Empty = off.
     ):
         super().__init__()
+        self.dynamic_label_ids = tuple(int(v) for v in dynamic_label_ids)
 
         self.feature_dim = feature_dim
         self.sh_degree = sh_degree
@@ -802,6 +808,7 @@ class GaussianSplatRenderer(nn.Module):
                 context_intrs=context_intrs[b] if context_intrs is not None else None,
                 context_depth=context_depth[b] if context_depth is not None else None,
                 context_vel_mag=context_vel_mag[b] if context_vel_mag is not None else None,
+                labels=splats["labels"][b] if "labels" in splats else None,
             )
 
             # Generate constant fused gaussians
@@ -888,14 +895,23 @@ class GaussianSplatRenderer(nn.Module):
 
     def _classify_gaussians(self, means, static_flag=False,
                             context_extrs=None, context_intrs=None,
-                            context_depth=None, context_vel_mag=None):
+                            context_depth=None, context_vel_mag=None,
+                            labels=None):
         """
         Classify gaussians into dynamic and constant categories.
         Returns masks for dynamic gaussians and fusion data for constant gaussians.
+        labels: [S, N, C] one-hot per-Gaussian class (from the source views'
+        labels) -- with dynamic_label_ids set and static_flag on, Gaussians of
+        those classes are classified DYNAMIC (per-frame) instead of constant.
         """
         S, N, _ = means.shape
         if static_flag:
             constant_mask = torch.ones((S, N), dtype=torch.bool, device=means.device)
+            ids = tuple(getattr(self, "dynamic_label_ids", ()) or ())
+            if ids and labels is not None:
+                cls = labels.reshape(S, N, -1).argmax(-1)
+                mover = torch.isin(cls, torch.as_tensor(ids, device=cls.device))
+                constant_mask[mover] = False
         else:
             constant_mask = torch.zeros((S, N), dtype=torch.bool, device=means.device)
             if context_vel_mag is not None:
