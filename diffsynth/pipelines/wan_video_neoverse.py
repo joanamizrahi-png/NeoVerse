@@ -1058,8 +1058,20 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
         novel_context_world2cam = homo_matrix_inverse(novel_context_poses)
         h, w = image_size_hw
         for b_idx in range(batch_size):
-            for s_idx in range(len(novel_context_poses[b_idx])):
-                cur_gaussian = gaussians[b_idx][s_idx]
+            gs_list = gaussians[b_idx]
+            n_ctx = len(novel_context_poses[b_idx])
+            # STATIC scenes (views["is_static"]=True, v30 line): separate_splats
+            # fuses every frame's Gaussians into ONE constant set (timestamp -1),
+            # so gs_list has a single entry instead of one per context view and
+            # indexing it by s_idx raised IndexError (jobs 470333/470334). The
+            # shared set is culled ONCE at the end, keeping every Gaussian that is
+            # visible from AT LEAST ONE novel context pose; the average-geometry
+            # filter still moves the visible means per view (a Gaussian seen from
+            # two views takes the last view's smoothed depth).
+            shared = len(gs_list) < n_ctx
+            union_keep = {}
+            for s_idx in range(n_ctx):
+                cur_gaussian = gs_list[min(s_idx, len(gs_list) - 1)] if shared else gs_list[s_idx]
                 cur_extrinsic = novel_context_world2cam[b_idx][s_idx]
                 cur_intrinsic = context_intrinsics[b_idx][s_idx]
                 if cur_gaussian.means.shape[0] == 0:
@@ -1107,7 +1119,10 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                 visible_indices = valid_gs_indices[visible_mask]
                 if kernel_size == 0:
                     # Visibility-based Gaussian Culling
-                    cur_gaussian.keep_indices(visible_indices)
+                    if shared:
+                        union_keep.setdefault(id(cur_gaussian), []).append(visible_indices)
+                    else:
+                        cur_gaussian.keep_indices(visible_indices)
                 else:
                     # Average Geometry Filter
                     smoothed_depths = average_filter(rendered_depths, kernel_size=kernel_size)
@@ -1121,7 +1136,15 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
                         cur_intrinsic, cur_extrinsic
                     )
                     cur_gaussian.means[visible_indices] = world_coords
-                    cur_gaussian.keep_indices(visible_indices)
+                    if shared:
+                        union_keep.setdefault(id(cur_gaussian), []).append(visible_indices)
+                    else:
+                        cur_gaussian.keep_indices(visible_indices)
+            if shared:
+                for g in gs_list:
+                    parts = union_keep.get(id(g))
+                    if parts:
+                        g.keep_indices(torch.unique(torch.cat(parts)))
         return gaussians
 
 
