@@ -823,6 +823,11 @@ class GaussianSplatRenderer(nn.Module):
             final_gaussian_list = dynamic_gaussians
             if constant_gaussians is not None:
                 final_gaussian_list.append(constant_gaussians)
+            if getattr(self, "dynamic_label_ids", ()):
+                print(f"[rasterizer] batch {b}: {len(dynamic_gaussians)} per-frame groups "
+                      f"({sum(int(g.means.shape[0]) for g in dynamic_gaussians)} Gaussians, timestamps "
+                      f"{[int(g.timestamp) for g in dynamic_gaussians[:5]]}...), constant set "
+                      f"{int(constant_gaussians.means.shape[0]) if constant_gaussians is not None else 0}", flush=True)
             gaussian_list.append(final_gaussian_list)
 
         return gaussian_list
@@ -912,6 +917,10 @@ class GaussianSplatRenderer(nn.Module):
                 cls = labels.reshape(S, N, -1).argmax(-1)
                 mover = torch.isin(cls, torch.as_tensor(ids, device=cls.device))
                 constant_mask[mover] = False
+                print(f"[rasterizer] static movers: {int(mover.sum())} of {S * N} Gaussians in classes {ids} "
+                      f"kept per-frame (label tensor {tuple(labels.shape)})", flush=True)
+            elif ids:
+                print(f"[rasterizer] static movers requested {ids} but the splats carry NO labels -- all constant", flush=True)
         else:
             constant_mask = torch.zeros((S, N), dtype=torch.bool, device=means.device)
             if context_vel_mag is not None:
