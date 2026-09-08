@@ -329,6 +329,10 @@ def semantic_inference(
 
     # cache_gen passes a prebuilt pipe so the 30GB load happens ONCE per
     # job instead of once per sweep (halves cache-generation cost).
+    # Vanilla mode: without a finetune checkpoint the DiT must stay at its
+    # base channel count, so the semantic expansion is skipped too.
+    if not checkpoint:
+        disable_semantic_channels = True
     if _prebuilt_pipe is not None:
         pipe = _prebuilt_pipe
         pipe.semantic_analog_bits = bool(semantic_analog_bits)
@@ -378,12 +382,17 @@ def semantic_inference(
 
         # ---- 2b. Inject LoRA on DiT to match training. Must happen BEFORE checkpoint load
         # or the LoRA weights get discarded as unexpected keys.
-        _inject_lora_for_finetune(pipe, rank=lora_rank, target_modules=lora_target_modules)
-        print(f"Injected LoRA slots on DiT (rank {lora_rank}, "
-              f"targets={lora_target_modules or 'default'})", flush=True)
+        # No --checkpoint = VANILLA NeoVerse (base pipeline, no finetune): the
+        # control for "is this the world model or is it our finetune?".
+        if checkpoint:
+            _inject_lora_for_finetune(pipe, rank=lora_rank, target_modules=lora_target_modules)
+            print(f"Injected LoRA slots on DiT (rank {lora_rank}, "
+                  f"targets={lora_target_modules or 'default'})", flush=True)
 
-        # ---- 3. Load finetune weights ----
-        _load_finetune_checkpoint(pipe, checkpoint)
+            # ---- 3. Load finetune weights ----
+            _load_finetune_checkpoint(pipe, checkpoint)
+        else:
+            print("[inference] VANILLA: no checkpoint, no LoRA inject, no semantic expansion", flush=True)
 
         # ---- 3b. Optional diagnostic: zero the trunk LoRA (--zero_trunk_lora) ----
         # Hypothesis test for the v6 mottle: the shared attention/FFN LoRA is the ONLY
@@ -504,7 +513,10 @@ def semantic_inference(
     # (holey semantic rasterization from labeled Gaussians). Fall back to zeros only
     # if the caller didn't pass any -- that gives palette-noise output because the
     # model wasn't trained to inpaint from a blank hint.
-    if not disable_semantic_channels:
+    # Labels also drive the mover classification on the Gaussians, which is
+    # independent of the DiT's semantic channels -- so vanilla + movers still
+    # needs them in `views`.
+    if (not disable_semantic_channels) or static_movers or semantic_labels is not None:
         if semantic_labels is not None:
             # load_video may crop to num_frames < labels.shape[0] (SAM3 was run at
             # the video's native length); slice labels to match if longer, error if shorter.
@@ -822,8 +834,9 @@ def semantic_inference(
 def parse_args():
     p = argparse.ArgumentParser(description="Semantic-finetuned NeoVerse inference")
     p.add_argument("--input_path", required=True)
-    p.add_argument("--checkpoint", required=True,
-                   help="Path to a train_semantic checkpoint .safetensors")
+    p.add_argument("--checkpoint", default="",
+                   help="Path to a train_semantic checkpoint .safetensors; "
+                        "EMPTY = vanilla NeoVerse (base pipeline, no finetune)")
     p.add_argument("--output_dir", default="outputs/inference_semantic")
     p.add_argument("--model_path", default="models",
                    help="Base NeoVerse model directory (has NeoVerse/*.safetensors + reconstructor.ckpt)")
