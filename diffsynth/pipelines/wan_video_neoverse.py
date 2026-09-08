@@ -828,7 +828,7 @@ class WanVideoUnit_4DPreprocesser(PipelineUnit):
             }
 
         pipe.load_models_to_device(self.onload_model_names)
-        _rast = pipe.reconstructor.gs_renderer.rasterizer
+        _rast = pipe.reconstructor.gs_renderer   # owns separate_splats; .rasterizer only draws
         if tuple(getattr(_rast, "dynamic_label_ids", ())) != self.static_movers:
             _rast.dynamic_label_ids = self.static_movers
             print(f"[NeoVerse] static movers (per-frame classes in static mode): {self.static_movers or 'off'}", flush=True)

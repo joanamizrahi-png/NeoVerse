@@ -535,7 +535,7 @@ def semantic_inference(
         # priors unless the matching flag is up (2am find: poses rode along
         # unread — sum(cond_flags)>0 gates extract_priors entirely).
         cf = [0, 0, 1] if "camera_poses" in views else [0, 0, 0]
-        _rast = pipe.reconstructor.gs_renderer.rasterizer
+        _rast = pipe.reconstructor.gs_renderer   # the object that owns separate_splats / _classify_gaussians (NOT .rasterizer, which only draws)
         _rast.dynamic_label_ids = tuple(static_movers or ())
         if static_movers:
             print(f"[inference] static movers: classes {tuple(static_movers)} stay per-frame", flush=True)
