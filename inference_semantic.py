@@ -298,6 +298,7 @@ def semantic_inference(
     alpha_threshold: float = 1.0,
     static_scene: bool = False,
     static_movers=(),                      # class ids kept per-frame in static mode (12 person, 13 vehicle)
+    follow_path: bool = False,             # static scene: move the camera along the RECORDED path (else it is held at frame 0)
     append_views_dir: str = None,          # DREAM LIFT: dir with rgb.mp4 (+labels) to append
     append_views_timestamp: int = 40,      # scene-time the appended dream commits to
     append_views_stride: int = 1,          # subsample appended views (VRAM guard)
@@ -556,7 +557,12 @@ def semantic_inference(
     K_zoomed[:, 1, 1] *= ratio
 
     target_cam2world = cam_traj.c2w.to(device)
-    if cam_traj.mode == "relative" and not static_scene:
+    # In static-scene mode the relative trajectory used to be applied to a
+    # camera HELD at frame 0 (the appended-dream-view use). --follow_path
+    # composes it with the recorded camera path instead, so a static render
+    # walks the clip like the dynamic one does (2026-09-07: "why are the
+    # generated RGBs not moving videos").
+    if cam_traj.mode == "relative" and (not static_scene or follow_path):
         target_cam2world = input_cam2world @ target_cam2world
     target_world2cam = homo_matrix_inverse(target_cam2world)
 
@@ -841,6 +847,7 @@ def parse_args():
                    help="Skip Wan's 4-step distilled LoRA (slower but sometimes cleaner)")
     p.add_argument("--static_scene", action="store_true")
     p.add_argument("--static_movers", default="", help='class ids kept PER-FRAME in --static_scene mode, e.g. "12,13" (person, vehicle): no trails')
+    p.add_argument("--follow_path", action="store_true", help="with --static_scene: the camera walks the recorded path instead of standing at frame 0")
     p.add_argument("--append_views_dir", default=None,
                    help="DREAM LIFT pilot: dir with a generated sweep's rgb.mp4 "
                         "(+semantic_labels.npz) to append as reconstruction views")
@@ -944,6 +951,7 @@ def main():
                 resize_mode=args.resize_mode, seed=args.seed,
                 use_lora=not args.disable_lora, static_scene=args.static_scene,
                 static_movers=tuple(int(v) for v in args.static_movers.split(",") if v.strip()),
+                follow_path=args.follow_path,
                 semantic_channels=args.semantic_channels,
                 semantic_expansion_version=args.semantic_expansion_version,
                 semantic_x0_prediction=args.semantic_x0_prediction,
@@ -979,6 +987,7 @@ def main():
         use_lora=not args.disable_lora,
         static_scene=args.static_scene,
         static_movers=tuple(int(v) for v in args.static_movers.split(",") if v.strip()),
+        follow_path=args.follow_path,
         append_views_dir=args.append_views_dir,
         append_views_timestamp=args.append_views_timestamp,
         append_views_stride=args.append_views_stride,

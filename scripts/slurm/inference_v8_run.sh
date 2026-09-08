@@ -53,6 +53,9 @@ if [ -n "${PALETTE:-}" ] && [ "${PALETTE}" != "1" ]; then EXTRA="$EXTRA --palett
 if [ "${STATIC:-0}" = "1" ]; then EXTRA="$EXTRA --static_scene"; DECSUF="${DECSUF}_static"; fi
 # MOVERS=12,13 (with STATIC=1): those classes stay per-frame -- no trails.
 if [ -n "${MOVERS:-}" ]; then EXTRA="$EXTRA --static_movers $MOVERS"; DECSUF="${DECSUF}_movers${MOVERS//,/-}"; fi
+# FOLLOW=1 (with STATIC=1): the camera walks the recorded path instead of
+# standing at frame 0 (dynamic renders always follow it).
+if [ "${FOLLOW:-0}" = "1" ]; then EXTRA="$EXTRA --follow_path"; DECSUF="${DECSUF}_walk"; fi
 NUM_CLASSES=${NUM_CLASSES:-30}   # 14 for v9+ checkpoints
 if [ "$NUM_CLASSES" = "14" ]; then
     LABELS=outputs/sam3_labels_v14/${CLIP}.npz    # v14 hints for v14 models
