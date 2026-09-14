@@ -128,7 +128,9 @@ def main():
         conns_img = [c for c in reader.connections if c.topic == image_topic]
 
         # collect frame timestamps first (light pass), pick num_frames evenly
-        stamps = [t for c, t, _ in reader.messages(connections=conns_img)
+        # start/stop: the reader seeks by index, so a 30 s clip reads 30 s of a
+        # 70 GB bag rather than scanning all of it (2026-09-13).
+        stamps = [t for c, t, _ in reader.messages(connections=conns_img, start=t0, stop=t1)
                   if t0 <= t <= t1]
         assert len(stamps) >= args.num_frames, (
             f"only {len(stamps)} frames in window; shrink --start_sec/--duration")
@@ -137,7 +139,7 @@ def main():
 
         import cv2
         frames, k = [], 0
-        for c, t, raw in reader.messages(connections=conns_img):
+        for c, t, raw in reader.messages(connections=conns_img, start=t0, stop=t1):
             if not (t0 <= t <= t1):
                 continue
             if k in picks:
@@ -165,7 +167,8 @@ def main():
             assert conns_p, f"no topic {args.pano_topic}; run --inspect"
             # pano runs slower (~8Hz) than the camera: take the nearest pano
             # frame to each picked camera timestamp.
-            pmsgs = [(t, c, raw) for c, t, raw in reader.messages(connections=conns_p)
+            pmsgs = [(t, c, raw) for c, t, raw in reader.messages(
+                         connections=conns_p, start=t0 - int(2e9), stop=t1 + int(2e9))
                      if t0 - int(2e9) <= t <= t1 + int(2e9)]
             ptimes = np.array([t for t, _, _ in pmsgs])
             need = sorted({int(np.argmin(np.abs(ptimes - s))) for s in picked_stamps})
@@ -190,7 +193,7 @@ def main():
         odom = {"t": [], "xyz": [], "quat": []}
         if odom_topic:
             conns_od = [c for c in reader.connections if c.topic == odom_topic]
-            for c, t, raw in reader.messages(connections=conns_od):
+            for c, t, raw in reader.messages(connections=conns_od, start=t0, stop=t1):
                 if not (t0 <= t <= t1):
                     continue
                 msg = reader.deserialize(raw, c.msgtype)

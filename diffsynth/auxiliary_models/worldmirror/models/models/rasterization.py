@@ -621,7 +621,7 @@ class GaussianSplatRenderer(nn.Module):
         topk_idx = torch.topk(conf, K, dim=0, largest=True, sorted=False).indices  # [K]
 
         filtered = {}
-        mask_keys = ["means", "quats", "scales", "opacities", "sh", "conf", "weights", "labels"]
+        mask_keys = ["means", "quats", "scales", "opacities", "sh", "conf", "weights", "labels", "source_frame"]
 
         for key in splats.keys():
             if key in mask_keys and key in splats:
@@ -843,6 +843,11 @@ class GaussianSplatRenderer(nn.Module):
             keys = keys + ["labels"]
         for key in keys:
             constant_splats[key] = splats[key][batch_idx][s_idx, n_idx]
+        # Source-frame tag (2026-09-13, nav-rl fusion window): which recorded
+        # frame each constant Gaussian came from. Survives the confidence
+        # filter (gathered like the other keys) and the voxel prune (weighted
+        # mean of the merged Gaussians' frames). Read by nav-rl/src/env/window.py.
+        constant_splats["source_frame"] = s_idx.to(constant_splats["means"].dtype)
 
         # Apply confidence filtering before pruning
         if self.enable_conf_filter:
@@ -862,6 +867,7 @@ class GaussianSplatRenderer(nn.Module):
             labels=constant_splats.get("labels"),
             timestamp=-1,
         )
+        gaussians.source_frame = constant_splats["source_frame"]
         return gaussians
 
     def _create_dynamic_gaussians(self, splats, batch_idx, dynamic_indices):
