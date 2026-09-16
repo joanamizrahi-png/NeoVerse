@@ -149,7 +149,12 @@ def v14_palette(version: int = 1):
 # sidesteps the question of which ordering a given file used), and RUGD names.
 NAME_TO_V14 = {
     "void": 0, "sky": 1,
-    "dirt": 2, "gravel": 2, "mulch": 2,
+    "gravel": 2,
+    # 2026-09-16 (Joana): mulch and dirt on campus are planting beds beside the
+    # walkways (raw SAM3: mulch 8-13%, dirt 3-10% of Sequoia ground), not paths.
+    # Both go with ROUGH (sand/mud/rock/log: costly at 0.35, never a crash), so a
+    # dirt path stays crossable and trail means gravel PATHS at 0.85.
+    "dirt": 4, "mulch": 4,
     "grass": 3,
     "sand": 4, "mud": 4, "rock": 4, "rock-bed": 4, "rock bed": 4, "log": 4,
     "water": 5,
