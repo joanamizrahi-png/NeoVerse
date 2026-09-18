@@ -1,6 +1,6 @@
 """Side-by-side semantic panels for one clip: RGB | human GT | model A | model B ...
 
-Every panel is colorized from CLASS IDS with the same palette (v14, version 4),
+Every panel is colorized from CLASS IDS with the same palette (--palette, 6 for the v33 line),
 GT included, so colours mean the same thing in every panel and mp4 compression
 never enters the comparison. Each model panel's title carries its pixel
 accuracy against the GT (void excluded), so the eye and the number sit together.
@@ -44,7 +44,11 @@ def main():
     spec = importlib.util.spec_from_file_location("class_taxonomy", tax_path)
     tax = importlib.util.module_from_spec(spec); spec.loader.exec_module(tax)
     # the raw colour tables, no torch: v14_palette() would import it
-    if int(args.palette) == 4:
+    if int(args.palette) == 6:
+        cols = tax.V14_V6          # 2026-09-18: the palette the v33 line is trained and decoded with
+    elif int(args.palette) == 5:
+        cols = tax.V14_V5
+    elif int(args.palette) == 4:
         cols = tax.V14_V4
     elif int(args.palette) == 3:
         cols = tax.V14_V3
