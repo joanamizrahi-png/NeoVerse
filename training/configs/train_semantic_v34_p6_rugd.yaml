@@ -1,0 +1,97 @@
+# v34_p6_rugd (2026-09-17, Joana): v33 continued on SANPO + RUGD so the model
+# has the ROUGH and TRAIL vocabulary. v33 trains on sanpo_v26 (SANPO only),
+# whose human labels never contain rough (4) or trail (2), so on campus it
+# cannot paint a planting bed as rough whatever SAM3 says -- "blue is never
+# there". RUGD's human labels are the only dense source of both classes, and
+# under the 2026-09-16 merge (mulch and dirt -> rough, gravel -> trail) rough,
+# not trail, is RUGD's dominant ground class. SANPO (287 clips, 6 per session)
+# plus RUGD (32 clips) has never been trained: the asphalt-as-trail models of
+# August were RUGD-only because the SANPO rows were dropped by the length
+# filter (found 2026-09-01). Same recipe as v33 otherwise: palette 6, static
+# conditioning, static movers 12/13, CE on human GT only. Warm start from
+# v33's walk-tested epoch 9 (switch to epoch 20 if 490723 prefers it), 10
+# epochs, torchrun one process per GPU. Dataset root built by
+# scripts/convert_sanpo_clips.py (which hardcodes the *_v21 subdirectory names)
+# into data/sanpo_v34. Decode with PALETTE=6 and HEAD_DECODE=1.
+
+height: 336
+width: 560
+num_views: 81
+min_num_context_views: 11
+max_num_context_views: 21
+seed: 0
+
+semantic_channels: 16
+semantic_expansion_version: 2
+semantic_x0_prediction: true
+
+semantic_ce_weight: 0.1
+semantic_ce_sigma_max: 1.0
+semantic_ce_latent_frames: 2
+semantic_ce_ignore_void: true
+semantic_ce_gt_only: true
+semantic_ce_class_weights: null
+semantic_seg_weight: 0.05
+num_semantic_classes: 14
+semantic_palette_version: 6
+
+semantic_loss_weight: 2.0
+rgb_preservation_weight: 1.0
+snr_gamma: 5.0
+
+distill_lora_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors
+distill_lora_alpha: 1.0
+
+train_dataset: SpatialVID(split=None, ROOT="/scratch/m000204-pm06b/joana/data/sanpo_v34/combined_train_data_v21", labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v34/sam3_labels_v21", target_labels_dir="/scratch/m000204-pm06b/joana/data/sanpo_v34/gt_labels_v21", segments_dir="/scratch/m000204-pm06b/joana/NeoVerse/outputs/sam2_segments", max_interval=5, height=${height}, width=${width}, num_views=${num_views}, min_num_context_views=${min_num_context_views}, max_num_context_views=${max_num_context_views}, seed=${seed}, static_scene=True)
+
+model_path: /scratch/m000204-pm06b/joana/NeoVerse/models
+reconstructor_path: /scratch/m000204-pm06b/joana/NeoVerse/models/NeoVerse/reconstructor.ckpt
+
+pipeline_kwargs:
+  novel_view_sampling_trans: [0.01, 0.1]
+  novel_view_sampling_max_rot: 0.0
+  culling_prob: 0.3
+  static_movers: [12, 13]
+  kernel_size_range: [11, 51]
+  occlusion_thresh: 0.1
+  alpha_thresh: 0.5
+  color_thresh: [50, 100]
+  prompt_drop_prob: 0.1
+  mask_drop_prob: 0.2
+  condition_drop_prob: 0.05
+
+trainable_models: "dit.patch_embedding.sem,dit.head.head.sem,control_branch.control_patch_embedding.sem,semantic_class_head"
+
+lora_base_model: dit
+lora_target_modules: "q,k,v,o,ffn.0,ffn.2"
+lora_exclude_modules: null
+lora_rank: 8
+
+pretrained_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v33_p6_multi/checkpoint-epoch-9.safetensors
+
+learning_rate: 1e-4
+num_epochs: 10
+batch_size: 1
+num_workers: 2
+pin_memory: false
+gradient_accumulation_steps: 1
+output_path: /scratch/m000204-pm06b/joana/runs/train_semantic_v34_p6_rugd
+remove_prefix_in_ckpt: pipe.
+
+use_gradient_checkpointing: true
+use_gradient_checkpointing_offload: true
+max_timestep_boundary: 1.0
+min_timestep_boundary: 0.0
+
+print_freq: 5
+save_freq: 0.25
+clip_grad: 1.0
+resume: null
+start_epoch: 0
+resume_step: null
+
+wandb_project: neoverse-semantic
+wandb_run_name: v34_p6_rugd_from_v33e9
+wandb_mode: online
+
+debug_save_root: null
