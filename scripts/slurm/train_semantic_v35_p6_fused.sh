@@ -4,7 +4,7 @@
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=192G
+#SBATCH --mem=450G
 #SBATCH --time=05:00:00
 #SBATCH --exclude=n04,n13,n17,n24
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v35_p6_fused-%j.out

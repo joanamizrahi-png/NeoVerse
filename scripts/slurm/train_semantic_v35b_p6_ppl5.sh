@@ -4,7 +4,7 @@
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=192G
+#SBATCH --mem=450G
 #SBATCH --time=05:00:00
 #SBATCH --exclude=n04,n13,n17,n24
 #SBATCH --output=/scratch/m000204-pm06b/joana/slurm-train-sem-v35b_p6_ppl5-%j.out
@@ -16,6 +16,8 @@
 #   python scripts/filter_sanpo_by_person_share.py --root .../sanpo_v26/combined_train_data_v21 \
 #       --gt_dir .../sanpo_v26/gt_labels_v21 --max_share 0.05 --out .../sanpo_v26/combined_train_data_v21_ppl5
 # Same torchrun launch as v33; ~21 min per epoch on 4 GPUs at 183 clips -> ~1 h.
+# --mem=450G: four processes each load the 14B weights into host RAM (~100 GB each);
+# 192G was OOM-killed at load time (494414, 2026-09-20).
 #   sbatch scripts/slurm/train_semantic_v35b_p6_ppl5.sh
 set -euo pipefail
 NGPU=${NGPU:-4}
