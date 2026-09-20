@@ -33,6 +33,7 @@ _tax = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_tax)
 PAL = np.asarray(_tax.V14_V6, np.float32)          # [14,3]
 MOVERS = (12, 13)
 WALK = (2, 6, 7, 8)
+SUB = 4
 
 
 def decode(path: str) -> np.ndarray:
@@ -41,8 +42,11 @@ def decode(path: str) -> np.ndarray:
         ok, f = cap.read()
         if not ok:
             break
+        # 2026-09-20: every 4th pixel in each direction (the audit reports
+        # ratios; 16x fewer pixels made the login-node run minutes, not an hour)
+        f = f[::SUB, ::SUB]
         rgb = f[:, :, ::-1].astype(np.float32)
-        d = ((rgb[:, :, None, :] - PAL[None, None, :, :]) ** 2).sum(-1)      # [H,W,14]
+        d = ((rgb[:, :, None, :] - PAL[None, None, :, :]) ** 2).sum(-1)      # [h,w,14]
         frames.append(d.argmin(-1).astype(np.int8))
     cap.release()
     return np.stack(frames) if frames else np.zeros((0, 1, 1), np.int8)
@@ -70,6 +74,7 @@ def audit(root: str):
         tot["tm_hint_other"] += int((tm & ~hm & ~hv).sum())
         tot["tgt_walk"] += int(tw.sum()); tot["tw_hint_mover"] += int((tw & hm).sum())
         n_clips += 1
+        print(f"   [{n_clips}/{len(clips)}] {os.path.basename(os.path.dirname(t))}: {n} frames", flush=True)
     return n_clips, tot
 
 
